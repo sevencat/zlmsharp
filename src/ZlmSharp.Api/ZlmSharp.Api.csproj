@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ZlmSharp.Api</RootNamespace>
+    <AssemblyName>ZlmSharp.Api</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp.Configuration\ZlmSharp.Configuration.csproj" />
+  </ItemGroup>
+
+</Project>

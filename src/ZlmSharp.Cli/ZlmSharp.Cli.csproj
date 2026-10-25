@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ZlmSharp.Cli</RootNamespace>
+    <AssemblyName>zlmsharp</AssemblyName>
+
+    <!-- 发布即 NativeAOT；dotnet run 仍走 JIT 便于调试 -->
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <OptimizationPreference>Speed</OptimizationPreference>
+
+    <!-- 发布目录只留 exe + zlmsharp.ini -->
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp.Server\ZlmSharp.Server.csproj" />
+  </ItemGroup>
+
+  <!-- NLog 大量使用反射（布局渲染器/目标工厂），NativeAOT 下整体保留，避免运行期丢失类型 -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="NLog" />
+    <TrimmerRootAssembly Include="NLog.Extensions.Logging" />
+  </ItemGroup>
+
+  <!-- 发布目录保持干净：只留 zlmsharp.exe（首次运行自动生成 zlmsharp.ini）。
+       ILC 会产出原生 pdb，ANCM shim 仅 IIS 在进程内托管时才需要，本项目自托管用不到。 -->
+  <Target Name="CleanPublishOutput" AfterTargets="Publish">
+    <PropertyGroup>
+      <FullPublishDir>$([System.IO.Path]::GetFullPath('$(PublishDir)'))</FullPublishDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <PublishedJunk Include="$(FullPublishDir)*.pdb" />
+      <PublishedJunk Include="$(FullPublishDir)aspnetcorev2_inprocess.dll" />
+    </ItemGroup>
+    <Delete Files="@(PublishedJunk)" />
+  </Target>
+
+</Project>
