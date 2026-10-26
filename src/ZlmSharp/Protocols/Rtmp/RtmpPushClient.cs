@@ -48,7 +48,7 @@ public static class RtmpPushClient
             throw new ArgumentException($"不是合法的 RTMP 推流地址: {url}", nameof(url));
         }
 
-        var config = H264ConfigResolver.Resolve(source)
+        var config = VideoCodecConfigResolver.Resolve(source)
             ?? throw new InvalidOperationException($"流还没有 H.264 参数集，无法转推：{source.Key}");
 
         var settings = options ?? new RtmpPushOptions();

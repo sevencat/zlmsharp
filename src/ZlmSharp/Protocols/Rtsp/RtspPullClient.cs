@@ -381,7 +381,7 @@ public static class RtspPullClient
             source.AddFrame(MediaFrame.Create(
                 accessUnit,
                 TrackType.Video,
-                CodecId.H264,
+                track.Track.Codec,
                 dts,
                 dts,
                 keyFrame ? FrameFlags.Key : FrameFlags.None));
@@ -426,27 +426,63 @@ public static class RtspPullClient
 
     private static void EnsureInBandConfig(MediaSource source, byte[] accessUnit, long dts)
     {
-        if (source.Video.Sps is not null)
+        var hevc = source.Video.CodecId == CodecId.H265;
+        if (hevc ? source.Video.Vps is not null : source.Video.Sps is not null)
         {
             return;
         }
 
+        byte[]? vps = null;
         byte[]? sps = null;
         byte[]? pps = null;
         foreach (var nal in AnnexB.Split(accessUnit))
         {
-            switch (H264NalUnit.GetType(nal))
+            if (nal.Length < 2)
             {
-                case H264NalUnitType.Sps:
-                    sps ??= nal;
-                    break;
-                case H264NalUnitType.Pps:
-                    pps ??= nal;
-                    break;
+                continue;
+            }
+
+            if (hevc)
+            {
+                if (!H265NalUnit.TryReadHeader(nal, out var type, out _))
+                {
+                    continue;
+                }
+
+                switch (type)
+                {
+                    case H265NalUnitType.Vps:
+                        vps ??= nal;
+                        break;
+                    case H265NalUnitType.Sps:
+                        sps ??= nal;
+                        break;
+                    case H265NalUnitType.Pps:
+                        pps ??= nal;
+                        break;
+                }
+            }
+            else
+            {
+                switch (H264NalUnit.GetType(nal))
+                {
+                    case H264NalUnitType.Sps:
+                        sps ??= nal;
+                        break;
+                    case H264NalUnitType.Pps:
+                        pps ??= nal;
+                        break;
+                }
             }
         }
 
-        if (sps is not null && pps is not null)
+        if (hevc && vps is not null && sps is not null && pps is not null)
+        {
+            ApplyH265VideoConfig(source, vps, sps, pps, dts);
+            return;
+        }
+
+        if (!hevc && sps is not null && pps is not null)
         {
             ApplyVideoConfig(source, sps, pps, dts);
         }
@@ -456,7 +492,14 @@ public static class RtspPullClient
     {
         if (description.Video is { HasParameterSets: true } video)
         {
-            ApplyVideoConfig(source, video.Sps!, video.Pps!, 0, withConfigFrame: true);
+            if (video.IsH265)
+            {
+                ApplyH265VideoConfig(source, video.Vps!, video.Sps!, video.Pps!, 0, withConfigFrame: true);
+            }
+            else
+            {
+                ApplyVideoConfig(source, video.Sps!, video.Pps!, 0, withConfigFrame: true);
+            }
         }
 
         if (description.Audio is { } audio)
@@ -498,6 +541,37 @@ public static class RtspPullClient
             config.BuildAnnexBParameterSets(),
             TrackType.Video,
             CodecId.H264,
+            dts,
+            dts,
+            FrameFlags.Config | FrameFlags.Key));
+    }
+
+    private static void ApplyH265VideoConfig(
+        MediaSource source,
+        byte[] vps,
+        byte[] sps,
+        byte[] pps,
+        long dts,
+        bool withConfigFrame = true)
+    {
+        source.Video.SetCodec(CodecId.H265);
+        source.Video.SetH265Config(vps, sps, pps);
+
+        if (H265SpsParser.TryParse(sps, out var info, out _) && info is not null)
+        {
+            source.Video.SetVideoSize(info.Width, info.Height);
+        }
+
+        if (!withConfigFrame)
+        {
+            return;
+        }
+
+        var config = new H265Config { Vps = vps, Sps = sps, Pps = pps };
+        source.AddFrame(MediaFrame.Create(
+            config.BuildAnnexBParameterSets(),
+            TrackType.Video,
+            CodecId.H265,
             dts,
             dts,
             FrameFlags.Config | FrameFlags.Key));
@@ -653,7 +727,11 @@ public static class RtspPullClient
             Track = track;
             RtpChannel = rtpChannel;
             RtcpChannel = rtcpChannel;
-            Video = track.Kind == SdpMediaKind.Video ? new H264RtpDepacketizer() : null;
+            Video = track.Kind != SdpMediaKind.Video
+            ? null
+            : track.IsH265
+                ? new H265RtpDepacketizer()
+                : new H264RtpDepacketizer();
             Audio = track.Kind == SdpMediaKind.Audio ? new AacRtpDepacketizer() : null;
             LocalSsrc = (uint)Random.Shared.NextInt64(1, int.MaxValue);
         }
@@ -664,7 +742,7 @@ public static class RtspPullClient
 
         public int RtcpChannel { get; }
 
-        public H264RtpDepacketizer? Video { get; }
+        public IVideoRtpDepacketizer? Video { get; }
 
         public AacRtpDepacketizer? Audio { get; }
 

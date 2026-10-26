@@ -1,11 +1,12 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using ZlmSharp.Core;
 
 namespace ZlmSharp.Recording;
 
 /// <summary>
-/// 最小 MPEG-TS 封装（HLS 切片用）：PAT/PMT + H.264（PES 0xE0）+ AAC（ADTS，PES 0xC0），
-/// 188 字节定长包，PCR 挂在视频 PID 上。只支持本项目现有场景（H.264 + 可选 AAC）。
+/// 最小 MPEG-TS 封装（HLS 切片用）：PAT/PMT + 视频（PES 0xE0；H.264 stream_type 0x1B / H.265 0x24）
+/// + AAC（ADTS，PES 0xC0），188 字节定长包，PCR 挂在视频 PID 上。
 /// </summary>
 internal sealed class TsMuxer : IDisposable
 {
@@ -28,13 +29,21 @@ internal sealed class TsMuxer : IDisposable
     private readonly bool _hasAudio;
     private readonly int _sampleRateIndex;
     private readonly int _channels;
+    private readonly byte _videoStreamType;
 
     private long _lastPsiMs = long.MinValue;
     private bool _disposed;
 
-    public TsMuxer(Stream stream, byte[]? audioSpecificConfig, int sampleRate, int channels)
+    public TsMuxer(
+        Stream stream,
+        byte[]? audioSpecificConfig,
+        int sampleRate,
+        int channels,
+        CodecId videoCodec = CodecId.H264)
     {
         _stream = stream;
+        // H.264 → stream_type 0x1B，H.265 → 0x24
+        _videoStreamType = videoCodec == CodecId.H265 ? (byte)0x24 : (byte)0x1B;
 
         if (audioSpecificConfig is { Length: >= 2 })
         {
@@ -124,7 +133,7 @@ internal sealed class TsMuxer : IDisposable
 
         _lastPsiMs = dtsMs;
         WriteTsPacket(0, BuildPat(), payloadUnitStart: true, writePcr: false, pcr90k: 0);
-        WriteTsPacket(PidPmt, BuildPmt(_hasAudio), payloadUnitStart: true, writePcr: false, pcr90k: 0);
+        WriteTsPacket(PidPmt, BuildPmt(_hasAudio, _videoStreamType), payloadUnitStart: true, writePcr: false, pcr90k: 0);
     }
 
     private int BuildVideoPes(byte[] buffer, byte[] annexB, long dtsMs, long ptsMs)
@@ -277,7 +286,7 @@ internal sealed class TsMuxer : IDisposable
         return payload;
     }
 
-    private static byte[] BuildPmt(bool hasAudio)
+    private static byte[] BuildPmt(bool hasAudio, byte videoStreamType)
     {
         var streams = hasAudio ? 2 : 1;
         var sectionLength = 9 + (streams * 5) + 4;
@@ -296,7 +305,7 @@ internal sealed class TsMuxer : IDisposable
         section[11] = 0x00;
 
         var position = 12;
-        position = WriteStream(section, position, 0x1B, PidVideo);
+        position = WriteStream(section, position, videoStreamType, PidVideo);
         if (hasAudio)
         {
             WriteStream(section, position, 0x0F, PidAudio);

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>zlmsharp 控制台</title>
+  <link rel="stylesheet" href="/admin/style.css" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">▶</span>
+    <div>
+      <h1>zlmsharp</h1>
+      <p id="version" class="muted">连接中…</p>
+    </div>
+  </div>
+  <div class="auth">
+    <input id="secret" type="password" placeholder="api.secret（回环可留空）" autocomplete="off" />
+    <button id="saveSecret" class="primary">保存</button>
+    <button id="refresh">刷新</button>
+  </div>
+</header>
+
+<main>
+  <section class="cards" id="stats"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>在线流</h2>
+      <span class="muted" id="streamHint"></span>
+    </div>
+    <table>
+      <thead>
+      <tr><th>流</th><th>编码</th><th>分辨率</th><th>读者</th><th>来源</th><th>丢帧</th><th>操作</th></tr>
+      </thead>
+      <tbody id="streams"></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="playerPanel" hidden>
+    <div class="panel-head">
+      <h2>播放 <span id="playerTitle" class="muted"></span></h2>
+      <button id="closePlayer">关闭</button>
+    </div>
+    <video id="player" controls autoplay muted playsinline></video>
+    <p class="muted" id="playerHint"></p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>拉流代理 / 转推</h2></div>
+    <div class="row">
+      <input id="proxyApp" placeholder="app（如 live）" value="live" />
+      <input id="proxyStream" placeholder="stream" />
+      <input id="proxyUrl" placeholder="rtsp:// 或 rtmp:// 源地址" />
+      <button id="addProxy" class="primary">添加代理</button>
+    </div>
+    <div class="row">
+      <input id="pushApp" placeholder="app" value="live" />
+      <input id="pushStream" placeholder="stream" />
+      <input id="pushUrl" placeholder="rtmp:// 目标地址" />
+      <button id="addPush" class="primary">添加转推</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>会话</h2>
+      <button id="loadSessions">加载</button>
+    </div>
+    <table>
+      <thead><tr><th>ID</th><th>类型</th><th>流</th><th>对端</th><th>操作</th></tr></thead>
+      <tbody id="sessions"></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>录像文件</h2>
+      <div class="row tight">
+        <input id="recordApp" placeholder="app" value="live" />
+        <input id="recordStream" placeholder="stream" />
+        <button id="loadRecords">查询</button>
+      </div>
+    </div>
+    <ul id="records" class="list"></ul>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>AI 分析</h2>
+      <div class="row tight">
+        <input id="aiStream" placeholder="stream" />
+        <button id="loadYolo">YOLO 结果</button>
+        <button id="loadAnalysis">通用结果</button>
+      </div>
+    </div>
+    <pre id="aiOutput" class="log"></pre>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>请求日志</h2>
+      <button id="clearLog">清空</button>
+    </div>
+    <pre id="log" class="log"></pre>
+  </section>
+</main>
+
+<footer class="muted">
+  管理页面由 zlmsharp 内置（无前端构建）；接口与 ZLM 兼容，可直接用 <code>/index/api/*</code> 集成。
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
+<script src="/admin/app.js"></script>
+</body>
+</html>

@@ -27,7 +27,7 @@ public sealed record FlvMetadata
 /// </summary>
 public sealed class FlvMuxer
 {
-    private readonly H264Config _config;
+    private readonly VideoCodecConfig _config;
     private readonly FlvMetadata _metadata;
     private readonly byte[]? _audioConfig;
     private readonly int _audioSampleRate;
@@ -44,6 +44,17 @@ public sealed class FlvMuxer
         ReadOnlyMemory<byte> audioConfig = default,
         int audioSampleRate = 0,
         int audioChannels = 0)
+        : this(VideoCodecConfig.FromH264(config), metadata, audioConfig, audioSampleRate, audioChannels)
+    {
+    }
+
+    /// <summary>H.264 / H.265 通用构造：按参数集自动选择 AVCDecoderConfigurationRecord 或 hvcC。</summary>
+    public FlvMuxer(
+        VideoCodecConfig config,
+        FlvMetadata? metadata = null,
+        ReadOnlyMemory<byte> audioConfig = default,
+        int audioSampleRate = 0,
+        int audioChannels = 0)
     {
         _config = config;
         _metadata = metadata ?? new FlvMetadata();
@@ -51,6 +62,9 @@ public sealed class FlvMuxer
         _audioSampleRate = audioSampleRate;
         _audioChannels = audioChannels;
     }
+
+    /// <summary>FLV 视频编码 id：H.264 → 7，H.265 → 12。</summary>
+    public byte VideoCodecId => _config.IsHevc ? FlvConstants.VideoCodecHevc : FlvConstants.VideoCodecAvc;
 
     public long? BaseDts => _baseDts;
 
@@ -89,7 +103,7 @@ public sealed class FlvMuxer
         WriteAmfPropertyName(writer, "height");
         WriteAmfNumber(writer, _metadata.Height);
         WriteAmfPropertyName(writer, "videocodecid");
-        WriteAmfNumber(writer, FlvConstants.VideoCodecAvc);
+        WriteAmfNumber(writer, VideoCodecId);
         WriteAmfPropertyName(writer, "framerate");
         WriteAmfNumber(writer, _metadata.FrameRate <= 0 ? 25 : _metadata.FrameRate);
 
@@ -116,19 +130,22 @@ public sealed class FlvMuxer
     /// <summary>script tag：onMetaData。</summary>
     public byte[] BuildMetadataTag() => BuildTag(FlvTagType.Script, 0, BuildMetadataBody());
 
-    /// <summary>video tag 的 body：AVCDecoderConfigurationRecord（AVCPacketType=0），RTMP 播放直接复用。</summary>
+    /// <summary>
+    /// video tag 的 body：AVCDecoderConfigurationRecord（H.264）或 hvcC（H.265），
+    /// byte1 = 0 表示 sequence header，RTMP 播放直接复用。
+    /// </summary>
     public byte[] BuildAvcConfigBody()
     {
-        var record = _config.BuildAvcConfigRecord();
+        var record = _config.BuildConfigRecord();
         var body = new byte[5 + record.Length];
-        body[0] = 0x17; // keyframe + AVC
-        body[1] = 0;    // AVC sequence header
+        body[0] = (byte)(0x10 | VideoCodecId); // keyframe + 编码 id（7=AVC / 12=HEVC）
+        body[1] = 0;    // sequence header
         // body[2..5] = composition time = 0
         record.CopyTo(body, 5);
         return body;
     }
 
-    /// <summary>video tag：AVCDecoderConfigurationRecord（AVCPacketType=0）。</summary>
+    /// <summary>video tag：AVC/HEVC sequence header。</summary>
     public byte[] BuildAvcConfigTag() => BuildTag(FlvTagType.Video, 0, BuildAvcConfigBody());
 
     /// <summary>audio tag 的 body：AAC sequence header（AACPacketType=0）。</summary>
@@ -214,8 +231,8 @@ public sealed class FlvMuxer
         var bodySize = 5 + payloadLength;
         var span = writer.GetSpan(bodySize);
 
-        span[0] = (byte)(((frame.IsKeyFrame ? 1 : 2) << 4) | FlvConstants.VideoCodecAvc);
-        span[1] = 1; // AVC NALU
+        span[0] = (byte)(((frame.IsKeyFrame ? 1 : 2) << 4) | VideoCodecId);
+        span[1] = 1; // AVC / HEVC NALU
 
         var compositionTime = (int)Math.Clamp(frame.Pts - frame.Dts, -0x800000, 0x7FFFFF);
         span[2] = (byte)(compositionTime >> 16);

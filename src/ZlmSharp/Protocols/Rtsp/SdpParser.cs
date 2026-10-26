@@ -1,4 +1,5 @@
 using System.Globalization;
+using ZlmSharp.Core;
 
 namespace ZlmSharp.Protocols.Rtsp;
 
@@ -18,8 +19,16 @@ public sealed record SdpMediaTrack(
     string Encoding,
     byte[]? Sps,
     byte[]? Pps,
-    byte[]? AudioSpecificConfig)
+    byte[]? AudioSpecificConfig,
+    byte[]? Vps = null)
 {
+    /// <summary>视频轨是否为 HEVC（rtpmap 里是 H265 或 HEVC）。</summary>
+    public bool IsH265 =>
+        Encoding.Equals("H265", StringComparison.OrdinalIgnoreCase) ||
+        Encoding.Equals("HEVC", StringComparison.OrdinalIgnoreCase);
+
+    public CodecId Codec => IsH265 ? CodecId.H265 : CodecId.H264;
+
     /// <summary>从 <c>a=control:trackID=1</c> / <c>streamid=1</c> 解析出的轨道号；没有时为 -1。</summary>
     public int TrackId
     {
@@ -39,10 +48,12 @@ public sealed record SdpMediaTrack(
         }
     }
 
-    public bool HasParameterSets => Sps is { Length: > 0 } && Pps is { Length: > 0 };
+    public bool HasParameterSets => IsH265
+        ? Vps is { Length: > 0 } && Sps is { Length: > 0 } && Pps is { Length: > 0 }
+        : Sps is { Length: > 0 } && Pps is { Length: > 0 };
 }
 
-/// <summary>ANNOUNCE 的完整描述：最多一条 H.264 视频轨 + 一条 AAC 音频轨。</summary>
+/// <summary>ANNOUNCE 的完整描述：最多一条 H.264/H.265 视频轨 + 一条 AAC 音频轨。</summary>
 public sealed record SdpDescription(SdpMediaTrack? Video, SdpMediaTrack? Audio)
 {
     public bool IsEmpty => Video is null && Audio is null;
@@ -77,7 +88,7 @@ public static class SdpParser
             return false;
         }
 
-        if (description!.Video is not { } video)
+        if (description!.Video is not { } video || video.IsH265)
         {
             error = "SDP 中没有 H.264 视频轨道";
             return false;
@@ -124,14 +135,28 @@ public static class SdpParser
             if (kind == SdpMediaKind.Video)
             {
                 if (video is null && !string.IsNullOrEmpty(encoding) &&
-                    encoding.Equals("H264", StringComparison.OrdinalIgnoreCase))
+                    (encoding.Equals("H264", StringComparison.OrdinalIgnoreCase) ||
+                     encoding.Equals("H265", StringComparison.OrdinalIgnoreCase) ||
+                     encoding.Equals("HEVC", StringComparison.OrdinalIgnoreCase)))
                 {
+                    var isHevc = !encoding.Equals("H264", StringComparison.OrdinalIgnoreCase);
                     byte[]? sps = null;
                     byte[]? pps = null;
-                    if (!string.IsNullOrEmpty(fmtp) && !TryParseParameterSets(fmtp, out sps, out pps))
+                    byte[]? vps = null;
+
+                    if (!string.IsNullOrEmpty(fmtp))
                     {
-                        formatError = "sprop-parameter-sets 不是合法 base64";
-                        return;
+                        var parsed = isHevc
+                            ? TryParseH265ParameterSets(fmtp, out vps, out sps, out pps)
+                            : TryParseParameterSets(fmtp, out sps, out pps);
+
+                        if (!parsed)
+                        {
+                            formatError = isHevc
+                                ? "sprop-vps/sps/pps 不是合法 base64"
+                                : "sprop-parameter-sets 不是合法 base64";
+                            return;
+                        }
                     }
 
                     video = new SdpMediaTrack(
@@ -143,7 +168,8 @@ public static class SdpParser
                         encoding,
                         sps,
                         pps,
-                        null);
+                        null,
+                        vps);
                 }
             }
             else if (audio is null && !string.IsNullOrEmpty(encoding) && IsAacEncoding(encoding))
@@ -239,7 +265,7 @@ public static class SdpParser
 
         if (video is null && audio is null)
         {
-            error = "SDP 中没有可用的 H.264 / AAC 轨道";
+            error = "SDP 中没有可用的 H.264 / H.265 / AAC 轨道";
             return false;
         }
 
@@ -301,6 +327,66 @@ public static class SdpParser
         return int.TryParse(ptText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pt)
             ? (pt, rest[(space + 1)..].Trim())
             : (null, null);
+    }
+
+    /// <summary>HEVC 的 fmtp：<c>sprop-vps=..;sprop-sps=..;sprop-pps=..</c>（各自独立 base64）。</summary>
+    private static bool TryParseH265ParameterSets(
+        string fmtp,
+        out byte[]? vps,
+        out byte[]? sps,
+        out byte[]? pps)
+    {
+        vps = null;
+        sps = null;
+        pps = null;
+
+        foreach (var item in fmtp.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var equals = item.IndexOf('=');
+            if (equals <= 0)
+            {
+                continue;
+            }
+
+            var key = item[..equals].Trim();
+            var isVps = key.Equals("sprop-vps", StringComparison.OrdinalIgnoreCase);
+            var isSps = key.Equals("sprop-sps", StringComparison.OrdinalIgnoreCase);
+            var isPps = key.Equals("sprop-pps", StringComparison.OrdinalIgnoreCase);
+            if (!isVps && !isSps && !isPps)
+            {
+                continue;
+            }
+
+            byte[] decoded;
+            try
+            {
+                decoded = Convert.FromBase64String(item[(equals + 1)..].Trim());
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+
+            if (decoded.Length == 0)
+            {
+                continue;
+            }
+
+            if (isVps)
+            {
+                vps = decoded;
+            }
+            else if (isSps)
+            {
+                sps = decoded;
+            }
+            else
+            {
+                pps = decoded;
+            }
+        }
+
+        return true;
     }
 
     private static bool TryParseParameterSets(

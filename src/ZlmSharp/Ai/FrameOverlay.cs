@@ -118,6 +118,56 @@ public static class FrameOverlay
         }
     }
 
+    /// <summary>画线段（Bresenham，<paramref name="thickness"/> 为像素粗细），自动裁剪。</summary>
+    public static void DrawLine(
+        Span<byte> rgb,
+        int width,
+        int height,
+        int stride,
+        float x1,
+        float y1,
+        float x2,
+        float y2,
+        (byte R, byte G, byte B) color,
+        int thickness = 1)
+    {
+        var startX = (int)MathF.Round(x1);
+        var startY = (int)MathF.Round(y1);
+        var endX = (int)MathF.Round(x2);
+        var endY = (int)MathF.Round(y2);
+
+        var deltaX = Math.Abs(endX - startX);
+        var stepX = startX < endX ? 1 : -1;
+        var deltaY = -Math.Abs(endY - startY);
+        var stepY = startY < endY ? 1 : -1;
+        var error = deltaX + deltaY;
+        var size = Math.Max(1, thickness);
+        var half = size / 2;
+
+        while (true)
+        {
+            FillRect(rgb, width, height, stride, startX - half, startY - half, size, size, color);
+
+            if (startX == endX && startY == endY)
+            {
+                break;
+            }
+
+            var doubled = error * 2;
+            if (doubled >= deltaY)
+            {
+                error += deltaY;
+                startX += stepX;
+            }
+
+            if (doubled <= deltaX)
+            {
+                error += deltaX;
+                startY += stepY;
+            }
+        }
+    }
+
     /// <summary>画纯色矩形（自动裁剪）。</summary>
     public static void FillRect(
         Span<byte> rgb,

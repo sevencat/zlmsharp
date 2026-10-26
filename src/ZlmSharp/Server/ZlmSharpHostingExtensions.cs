@@ -171,6 +171,7 @@ public static class ZlmSharpHostingExtensions
             new ApiVersionInfo(ServerInfo.BuildTime, ServerInfo.BranchName, ServerInfo.CommitHash));
 
         HttpFlvEndpoint.Map(endpoints);
+        AdminPageEndpoints.Map(endpoints, runtime.Options);
         return endpoints;
     }
 }

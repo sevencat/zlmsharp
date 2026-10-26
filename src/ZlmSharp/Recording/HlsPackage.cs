@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using ZlmSharp.Core;
 
 namespace ZlmSharp.Recording;
 
@@ -23,6 +24,8 @@ internal sealed class HlsPackage : IDisposable
     private long _nextSequence;
     private bool _disposed;
 
+    private readonly CodecId _videoCodec;
+
     private byte[]? _audioSpecificConfig;
     private int _audioSampleRate;
     private int _audioChannels;
@@ -34,9 +37,11 @@ internal sealed class HlsPackage : IDisposable
         int segmentCount,
         byte[]? audioSpecificConfig,
         int audioSampleRate,
-        int audioChannels)
+        int audioChannels,
+        CodecId videoCodec = CodecId.H264)
     {
         Directory.CreateDirectory(directory);
+        _videoCodec = videoCodec;
 
         _directory = directory;
         _playlistName = name;
@@ -141,7 +146,7 @@ internal sealed class HlsPackage : IDisposable
         var stream = new FileStream(_currentFile, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024);
         try
         {
-            _muxer = new TsMuxer(stream, _audioSpecificConfig, _audioSampleRate, _audioChannels);
+            _muxer = new TsMuxer(stream, _audioSpecificConfig, _audioSampleRate, _audioChannels, _videoCodec);
         }
         catch
         {

@@ -22,6 +22,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 内置管理页面（零前端构建）；http.rootPath 下的同名文件可覆盖 -->
+    <EmbeddedResource Include="WebUI\index.html" LogicalName="ZlmSharp.WebUI.index.html" />
+    <EmbeddedResource Include="WebUI\app.js" LogicalName="ZlmSharp.WebUI.app.js" />
+    <EmbeddedResource Include="WebUI\style.css" LogicalName="ZlmSharp.WebUI.style.css" />
+  </ItemGroup>
+
+  <ItemGroup>
     <AssemblyMetadata Include="BuildTime" Value="$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))" />
     <AssemblyMetadata Include="BranchName" Value="main" />
     <AssemblyMetadata Include="CommitHash" Value="$(SourceRevisionId)" Condition="'$(SourceRevisionId)' != ''" />

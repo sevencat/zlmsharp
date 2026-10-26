@@ -19,6 +19,7 @@ namespace ZlmSharp.Api;
 [JsonSerializable(typeof(ApiYoloOverlayResponse))]
 [JsonSerializable(typeof(ApiYoloOverlayListResponse))]
 [JsonSerializable(typeof(ApiYoloOverlayFlagResponse))]
+[JsonSerializable(typeof(ApiAnalyzeResultResponse))]
 [JsonSerializable(typeof(ApiRecordResponse))]
 [JsonSerializable(typeof(ApiRecordListResponse))]
 [JsonSerializable(typeof(ApiRecordFlagResponse))]

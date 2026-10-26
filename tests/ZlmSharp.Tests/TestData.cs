@@ -39,4 +39,48 @@ internal static class TestData
         nal.CopyTo(result, 4);
         return result;
     }
+
+    // ==== HEVC（ffmpeg/libx265 生成的 320x240 单帧参数集）====
+
+    public static readonly byte[] H265Vps = Convert.FromBase64String("QAEMAf//BAgAAAMAn6gAAAMAADy6AkA=");
+
+    public static readonly byte[] H265Sps = Convert.FromBase64String("QgEBBAgAAAMAn6gAAAMAADygCggPFlupJMrwFoCAAAADAIAAAAyE");
+
+    public static readonly byte[] H265Pps = Convert.FromBase64String("RAHBcrBiQA==");
+
+    /// <summary>Annex-B 配置帧：VPS + SPS + PPS。</summary>
+    public static byte[] AnnexBH265Config()
+    {
+        var result = new byte[12 + H265Vps.Length + H265Sps.Length + H265Pps.Length];
+        var offset = 0;
+        foreach (var nal in new[] { H265Vps, H265Sps, H265Pps })
+        {
+            result[offset + 3] = 1;
+            offset += 4;
+            nal.CopyTo(result, offset);
+            offset += nal.Length;
+        }
+
+        return result;
+    }
+
+    /// <summary>HEVC IDR（类型 19）关键帧，payload 是任意填充。</summary>
+    public static byte[] AnnexBH265KeyFrame(byte fill = 0x33)
+    {
+        byte[] nal = [0x26, 0x01, 0xAF, fill, 0x09];
+        var result = new byte[4 + nal.Length];
+        result[3] = 1;
+        nal.CopyTo(result, 4);
+        return result;
+    }
+
+    /// <summary>HEVC 非关键帧（类型 1 TrailR）。</summary>
+    public static byte[] AnnexBH265InterFrame(byte fill = 0x44)
+    {
+        byte[] nal = [0x02, 0x01, 0xD0, fill];
+        var result = new byte[4 + nal.Length];
+        result[3] = 1;
+        nal.CopyTo(result, 4);
+        return result;
+    }
 }

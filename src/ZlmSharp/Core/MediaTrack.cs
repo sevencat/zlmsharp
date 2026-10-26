@@ -24,10 +24,13 @@ public sealed class MediaTrack
 
     public int Channels { get; private set; }
 
-    /// <summary>H.264 SPS（Annex-B 原始字节，不含起始码）。</summary>
+    /// <summary>H.265 VPS（Annex-B 原始字节，不含起始码）；H.264 流为 null。</summary>
+    public byte[]? Vps { get; private set; }
+
+    /// <summary>H.264 SPS / H.265 SPS（Annex-B 原始字节，不含起始码）。</summary>
     public byte[]? Sps { get; private set; }
 
-    /// <summary>H.264 PPS（Annex-B 原始字节，不含起始码）。</summary>
+    /// <summary>H.264 PPS / H.265 PPS（Annex-B 原始字节，不含起始码）。</summary>
     public byte[]? Pps { get; private set; }
 
     /// <summary>AAC AudioSpecificConfig（录制 MP4/FLV 时写 esds / sequence header）。</summary>
@@ -91,6 +94,18 @@ public sealed class MediaTrack
     {
         lock (_gate)
         {
+            Vps = null;
+            Sps = sps.ToArray();
+            Pps = pps.ToArray();
+            Ready = true;
+        }
+    }
+
+    public void SetH265Config(ReadOnlySpan<byte> vps, ReadOnlySpan<byte> sps, ReadOnlySpan<byte> pps)
+    {
+        lock (_gate)
+        {
+            Vps = vps.ToArray();
             Sps = sps.ToArray();
             Pps = pps.ToArray();
             Ready = true;
@@ -120,6 +135,7 @@ public sealed class MediaTrack
             Fps = 0;
             SampleRate = 0;
             Channels = 0;
+            Vps = null;
             Sps = null;
             Pps = null;
             AudioSpecificConfig = null;

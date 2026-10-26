@@ -65,7 +65,7 @@ public sealed class RtspSession
 
     private MediaSource? _source;
     private StreamKey _key;
-    private H264Config? _config;
+    private VideoCodecConfig? _config;
     private string _baseUri = "";
     private int _rtpChannel;
     private int _rtcpChannel = 1;
@@ -270,12 +270,12 @@ public sealed class RtspSession
             return;
         }
 
-        var config = _config ?? await H264ConfigResolver
+        var config = _config ?? await VideoCodecConfigResolver
             .WaitAsync(source, _options.WaitTrackReadyMS, cancellationToken)
             .ConfigureAwait(false);
         if (config is null)
         {
-            Log(RtspLogLevel.Warning, $"RTSP DESCRIBE 失败：{_key} 缺少 SPS/PPS");
+            Log(RtspLogLevel.Warning, $"RTSP DESCRIBE 失败：{_key} 缺少视频参数集");
             await WriteNotFoundAsync(request, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -284,7 +284,7 @@ public sealed class RtspSession
         _config = config;
         _baseUri = RtspUri.BuildBaseUri(request.Uri);
 
-        var sdp = SdpBuilder.BuildH264(config, _key.Stream, _options.RtpPayloadType);
+        var sdp = SdpBuilder.Build(config, _key.Stream, _options.RtpPayloadType);
         await WriteResponseAsync(
             request,
             200,
@@ -399,7 +399,7 @@ public sealed class RtspSession
             return;
         }
 
-        var config = _config ?? await H264ConfigResolver
+        var config = _config ?? await VideoCodecConfigResolver
             .WaitAsync(source, _options.WaitTrackReadyMS, cancellationToken)
             .ConfigureAwait(false);
         if (config is null)
@@ -619,7 +619,7 @@ public sealed class RtspSession
         var delta = Math.Max(0, frame.Dts - _baseDts.Value);
         var timestamp = (uint)(delta * 90); // 毫秒 → 90kHz
 
-        foreach (var packet in _rtp.Packetize(frame.Data.Span, timestamp))
+        foreach (var packet in _rtp.Packetize(frame.Data.Span, timestamp, _config?.Codec))
         {
             await SendRtpAsync(packet, cancellationToken).ConfigureAwait(false);
             _rtpPacketCount++;

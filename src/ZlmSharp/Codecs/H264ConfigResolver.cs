@@ -26,35 +26,13 @@ public static class H264ConfigResolver
                     continue;
                 }
 
-                byte[]? foundSps = null;
-                byte[]? foundPps = null;
-
-                foreach (var nal in AnnexB.Split(frame.Data.Span))
-                {
-                    switch (H264NalUnit.GetType(nal))
-                    {
-                        case H264NalUnitType.Sps:
-                            foundSps ??= nal;
-                            break;
-                        case H264NalUnitType.Pps:
-                            foundPps ??= nal;
-                            break;
-                    }
-                }
-
-                if (foundSps is null || foundPps is null)
+                var found = FromAnnexB(frame.Data.Span, track);
+                if (found is null)
                 {
                     continue;
                 }
 
-                track.SetH264Config(foundSps, foundPps);
-                track.SetCodec(CodecId.H264);
-                if (H264SpsParser.TryParse(foundSps, out var info, out _) && info is not null)
-                {
-                    track.SetVideoSize(info.Width, info.Height);
-                }
-
-                return new H264Config { Sps = foundSps, Pps = foundPps };
+                return found;
             }
             finally
             {
@@ -63,6 +41,45 @@ public static class H264ConfigResolver
         }
 
         return null;
+    }
+
+    /// <summary>从一帧 Annex-B 数据里提取 SPS/PPS 并回填轨道；没有完整参数集时返回 null。</summary>
+    public static H264Config? FromAnnexB(ReadOnlySpan<byte> annexB, MediaTrack track)
+    {
+        byte[]? foundSps = null;
+        byte[]? foundPps = null;
+
+        foreach (var nal in AnnexB.Split(annexB))
+        {
+            if (nal.Length < 2)
+            {
+                continue;
+            }
+
+            switch (H264NalUnit.GetType(nal))
+            {
+                case H264NalUnitType.Sps:
+                    foundSps ??= nal;
+                    break;
+                case H264NalUnitType.Pps:
+                    foundPps ??= nal;
+                    break;
+            }
+        }
+
+        if (foundSps is null || foundPps is null)
+        {
+            return null;
+        }
+
+        track.SetH264Config(foundSps, foundPps);
+        track.SetCodec(CodecId.H264);
+        if (H264SpsParser.TryParse(foundSps, out var info, out _) && info is not null)
+        {
+            track.SetVideoSize(info.Width, info.Height);
+        }
+
+        return new H264Config { Sps = foundSps, Pps = foundPps };
     }
 
     /// <summary>轮询等待参数集就绪；超时返回 null。</summary>

@@ -6,9 +6,9 @@ using ZlmSharp.Codecs;
 namespace ZlmSharp.Recording;
 
 /// <summary>
-/// 最小 MP4（ISO BMFF）封装：H.264（AVCC）+ AAC（raw），普通 MP4、moov 写在文件末尾。
-/// 只服务录像（非流式播放），假设 DTS 单调递增；B 帧通过 ctts 表达。
-/// 不支持：分片 MP4、edit list、多 SPS/PPS、HEVC。
+/// 最小 MP4（ISO BMFF）封装：H.264（avc1/avcC）或 H.265（hvc1/hvcC）+ AAC（raw），
+/// 普通 MP4、moov 写在文件末尾。只服务录像（非流式播放），假设 DTS 单调递增；B 帧通过 ctts 表达。
+/// 不支持：分片 MP4、edit list、多参数集切换。
 /// </summary>
 internal sealed class Mp4Writer : IDisposable
 {
@@ -17,7 +17,7 @@ internal sealed class Mp4Writer : IDisposable
 
     private readonly Stream _stream;
     private readonly bool _ownsStream;
-    private readonly H264Config _videoConfig;
+    private readonly VideoCodecConfig _videoConfig;
     private readonly int _width;
     private readonly int _height;
     private readonly byte[]? _audioConfig;
@@ -34,6 +34,27 @@ internal sealed class Mp4Writer : IDisposable
     public Mp4Writer(
         Stream stream,
         H264Config videoConfig,
+        int width,
+        int height,
+        ReadOnlyMemory<byte> audioConfig = default,
+        int audioSampleRate = 0,
+        int audioChannels = 0,
+        bool ownsStream = true)
+        : this(
+            stream,
+            VideoCodecConfig.FromH264(videoConfig),
+            width,
+            height,
+            audioConfig,
+            audioSampleRate,
+            audioChannels,
+            ownsStream)
+    {
+    }
+
+    public Mp4Writer(
+        Stream stream,
+        VideoCodecConfig videoConfig,
         int width,
         int height,
         ReadOnlyMemory<byte> audioConfig = default,
@@ -405,7 +426,7 @@ internal sealed class Mp4Writer : IDisposable
             WriteFullBoxHeader(stsd, 0, 0);
             WriteUInt32(stsd, 1);
 
-            WriteBox(stsd, "avc1", avc1 =>
+            WriteBox(stsd, _videoConfig.IsHevc ? "hvc1" : "avc1", avc1 =>
             {
                 for (var index = 0; index < 6; index++)
                 {
@@ -432,7 +453,8 @@ internal sealed class Mp4Writer : IDisposable
                 WriteUInt16(avc1, 0x0018); // depth
                 WriteUInt16(avc1, 0xFFFF); // pre_defined
 
-                WriteBox(avc1, "avcC", avcC => avcC.Write(_videoConfig.BuildAvcConfigRecord()));
+                var configBox = _videoConfig.IsHevc ? "hvcC" : "avcC";
+                WriteBox(avc1, configBox, box => box.Write(_videoConfig.BuildConfigRecord()));
             });
         });
     }
@@ -633,7 +655,7 @@ internal sealed class Mp4Writer : IDisposable
             WriteUInt32(ftyp, 0x200);
             WriteAscii(ftyp, "isom");
             WriteAscii(ftyp, "iso2");
-            WriteAscii(ftyp, "avc1");
+            WriteAscii(ftyp, _videoConfig.IsHevc ? "hvc1" : "avc1");
             WriteAscii(ftyp, "mp41");
         });
     }

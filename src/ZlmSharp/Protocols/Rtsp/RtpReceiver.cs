@@ -80,7 +80,7 @@ public readonly record struct RtpPacketHeader(
 /// H.264 RTP 解包（RFC 6184）：单 NALU / STAP-A / FU-A，marker 表示一个访问单元结束。
 /// 输出为 Annex-B（4 字节起始码），供 <see cref="ZlmSharp.Core.MediaSource"/> 直接使用。
 /// </summary>
-public sealed class H264RtpDepacketizer
+public sealed class H264RtpDepacketizer : IVideoRtpDepacketizer
 {
     private static ReadOnlySpan<byte> StartCode => [0, 0, 0, 1];
 

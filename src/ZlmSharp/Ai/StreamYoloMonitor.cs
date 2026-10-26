@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
 
@@ -21,6 +22,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
     private readonly YoloDetectorService _detector;
     private readonly MediaSourceRegistry _registry;
     private readonly YoloResultStore _store;
+    private readonly AnalysisResultStore _analyses;
     private readonly FfmpegDecoderPool _decoders;
     private readonly AppOptions _options;
     private readonly ILogger _logger;
@@ -32,6 +34,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
         YoloDetectorService detector,
         MediaSourceRegistry registry,
         YoloResultStore store,
+        AnalysisResultStore analyses,
         FfmpegDecoderPool decoders,
         AppOptions options,
         ILoggerFactory loggerFactory)
@@ -39,6 +42,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
         _detector = detector;
         _registry = registry;
         _store = store;
+        _analyses = analyses;
         _decoders = decoders;
         _options = options;
         _logger = loggerFactory.CreateLogger("ZlmSharp.Yolo");
@@ -84,6 +88,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
                         _trackers.Remove(key);
                         _decoders.Remove(key);
                         _store.Remove(key.Vhost, key.App, key.Stream);
+                        _analyses.RemoveStream(key);
                         continue;
                     }
 
@@ -143,7 +148,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
             var tracker = GetTracker(key, result.Width, result.Height);
             var tracked = tracker.Update(result.Objects);
 
-            _store.Set(new YoloSnapshot(
+            var snapshot = new YoloSnapshot(
                 key.Vhost,
                 key.App,
                 key.Stream,
@@ -152,7 +157,9 @@ internal sealed class StreamYoloMonitor : BackgroundService
                 result.Width,
                 result.Height,
                 tracked,
-                null));
+                null);
+            _store.Set(snapshot);
+            _analyses.Set(YoloAnalyzer.FromSnapshot(snapshot));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -161,7 +168,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
         catch (Exception exception)
         {
             _logger.LogDebug(exception, "YOLO 抽帧/检测失败 {Key}", key);
-            _store.Set(new YoloSnapshot(
+            var snapshot = new YoloSnapshot(
                 key.Vhost,
                 key.App,
                 key.Stream,
@@ -170,7 +177,9 @@ internal sealed class StreamYoloMonitor : BackgroundService
                 0,
                 0,
                 [],
-                exception.Message));
+                exception.Message);
+            _store.Set(snapshot);
+            _analyses.Set(YoloAnalyzer.FromSnapshot(snapshot));
         }
         finally
         {

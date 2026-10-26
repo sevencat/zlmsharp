@@ -14,7 +14,7 @@ internal sealed class FlvFileWriter : IDisposable
 
     public FlvFileWriter(
         string path,
-        H264Config videoConfig,
+        VideoCodecConfig videoConfig,
         FlvMetadata metadata,
         ReadOnlyMemory<byte> audioConfig,
         int audioSampleRate,

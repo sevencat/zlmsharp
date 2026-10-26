@@ -24,7 +24,7 @@ internal sealed class RecorderSession : IDisposable
     private readonly int _maxSeconds;
     private readonly string _root;
     private readonly ILogger? _logger;
-    private readonly H264Config _videoConfig;
+    private readonly VideoCodecConfig _videoConfig;
     private readonly int _width;
     private readonly int _height;
     private readonly CancellationTokenSource _cts = new();
@@ -68,7 +68,7 @@ internal sealed class RecorderSession : IDisposable
         _hlsSegmentSeconds = Math.Max(1, hlsSegmentSeconds);
         _hlsSegmentCount = Math.Max(2, hlsSegmentCount);
 
-        _videoConfig = H264ConfigResolver.Resolve(source)
+        _videoConfig = VideoCodecConfigResolver.Resolve(source)
             ?? throw new InvalidOperationException($"流还没有 H.264 参数集（未收到关键帧），无法录像：{key}");
 
         _width = source.Video.Width;
@@ -110,7 +110,8 @@ internal sealed class RecorderSession : IDisposable
                 _hlsSegmentCount,
                 _audioAsc,
                 _audioSampleRate,
-                _audioChannels);
+                _audioChannels,
+                _videoConfig.Codec);
         }
 
         // 先建好第一个切片，startRecord 能立即返回文件路径

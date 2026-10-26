@@ -22,6 +22,11 @@
 | M12 | YOLO 轻量 IoU 跟踪：跨帧稳定 `trackId`、丢失容忍、叠加标签带 ID | ✅ 完成 |
 | M13 | YOLO 多边形布防与告警：区域（多边形）命中用 `trackId` 关联、进出区域事件与告警回调 | 📋 规划 |
 | M14 | YOLO 检测结果 WS 推送：按流订阅/退订、变化时推送快照（含 `trackId`） | 📋 规划 |
+| M15 | H.265/HEVC 全链路：解析（VPS/SPS/PPS）、RFC 7798 RTP、FLV `hvcC`、MP4 `hvcC`、TS `0x24`、RTSP/RTMP 推播与转推 | ✅ 完成 |
+| M16 | 管理页面：内置静态站点（零构建前端）+ 流/会话/录像/代理/转推/AI 可视化，复用 `/index/api/*` | ✅ 完成 |
+| M17 | AI 通用层：`IStreamAnalyzer` / `IOverlayRenderer` / 通用结果模型，YOLO 成为首个实现，预留 OCR/车牌/布防 | ✅ 完成（通用调度待做） |
+| M18 | 国标 GB/T 28181 接入：SIP 信令（REGISTER/MESSAGE/INVITE）+ PS over RTP 收流，平台侧最小闭环 | 📋 规划 |
+| M19 | JT/T 809 接入：车辆注册/定位/报警报文接入与查询，与媒体流按设备号弱关联 | 📋 规划 |
 
 ## 已完成细节
 
@@ -171,7 +176,7 @@
 
 解决方案只保留 4 个项目：
 
-- `src/ZlmSharp`：唯一类库（程序集 `ZlmSharp.MediaServer`；exe 名固定 `zlmsharp`，程序集不能与它大小写不敏感重名），按目录分层：`Core` / `Codecs` / `Configuration` / `Protocols/{Flv,Rtmp,Rtsp}` / `Http` / `Recording` / `Ai` / `Api` / `Server`，命名空间保持原样，便于对照 ZLM 源码。
+- `src/ZlmSharp`：唯一类库（程序集 `ZlmSharp.MediaServer`；exe 名固定 `zlmsharp`，程序集不能与它大小写不敏感重名），按目录分层：`Core` / `Codecs`（H.264 + H.265）/ `Configuration` / `Protocols/{Flv,Rtmp,Rtsp}` / `Http` / `Recording` / `Ai`（含 `Ai/Analysis` 通用分析层）/ `Api` / `Server` / `WebUI`（管理页面，嵌入资源），命名空间保持原样，便于对照 ZLM 源码。
 - `src/ZlmSharp.Cli`：可执行入口，产物 `zlmsharp.exe`（NativeAOT 发布）。
 - `samples/ZlmSharp.Sample.Web`：嵌入模式示例。
 - `tests/ZlmSharp.Tests`：xUnit 单元/端到端测试。
@@ -179,15 +184,108 @@
 
 ## 测试基线
 
-`dotnet test tests/ZlmSharp.Tests`：**238 个用例全绿**，`dotnet build zlmsharp.sln` Debug/Release 均 0 警告。
+`dotnet test tests/ZlmSharp.Tests`：**259 个用例全绿**，`dotnet build zlmsharp.sln` Debug/Release 均 0 警告。
+
+三期新增覆盖：HEVC SPS/hvcC 往返（真实参数集）、RFC 7798 单包/FU 往返、H.265 SDP 生成与解析、FLV/MP4/TS 的 HEVC 封装、RTSP H.265 推流→播放端到端、通用分析层（结果存储/图元映射/三种 renderer/分析器注册表/伪分析器链路）、管理页面（内嵌资源、路由不遮蔽 API 与 FLV）。
 
 覆盖：配置绑定、StreamUrl 解析、媒体源/GOP/注册表、H.264 解析与 AVCC 互转、FLV 封装、HTTP-FLV（端到端）、AMF0、RTMP chunk、RTMP 握手（S1 版本字段）、RTMP 推流会话、RTMP 播放会话、RTMP 推流 → HTTP-FLV 端到端、拉流代理端到端（推流 → 代理 → 本地播放）、**RTSP 源拉流代理端到端、`[proxy]` 启动即拉（含源流后到重连）、代理 list 解析/并发上限/`originType`+`schema`**、RTSP 消息解析、SDP、RTP 打包、RTCP SR、**推流侧 RTCP RR 与 SR 解析、AAC 推流解包**、RTSP 播放会话（TCP / UDP）、RTSP 监听服务端到端（TCP / UDP）、RTSP PAUSE 续播与 Range 定位（seq/rtptime）、RTSP 推流（SDP 解析 / RTP 解包 / 目标 URI）、WS-FLV 端到端、getMediaList/close_streams、PPM 解析/显式 YOLO 配置、yoloInfo/yoloDetect（未启用/模型不可读/入参校验）、RGB24 绘框与标签（裁剪/stride/位图字体）、叠加流参数校验与叠加入口、IoU 跟踪（ID 稳定/丢失容忍/过期回收）、FLV 音频 tag、MP4/FLV 录制（stsz 采样数、avcC/esds、音频、切片）、**HLS/TS 录制（包对齐/PSI/PES/ADTS/切片滚动/非关键帧不建片）、录像文件 API（列出/删除/越界拒绝）、断流自动续录**、录像/转推 API 入参、hook（请求体字段/code 拒绝/HTTP 错误/超时/fail_open/RTMP 推流放行与拒绝）、会话注册表与 getSessionList/kick_session（含踢掉推流端）、无人观看回收（auto_close 开/关、残留流兜底、跨周期不误杀）、丢帧统计与 `dropFrames`、常驻解码器（启动失败路径、真实 ffmpeg 解码与池释放、连续取帧）。
 
 真实模型冒烟（不进常规 CI）：`ZLM_YOLO_TEST_MODEL=<本地 .pt|.onnx> dotnet test --filter YoloModelSmokeTests`，已验证 yolov8n / `F:\ai\models\yolo` 下的 ONNX 加载 → 推理 → 结果映射跑通（COCO 80 类）。
 
-## 下一步
+## 近期收尾（M8/M10 范围内）
 
 1. YOLO 三期：多边形布防与告警（区域命中按 `trackId` 关联，见 M13）、检测结果 WS 推送（按流订阅 + 快照推送，见 M14）、叠加流按需自动跟随（有人看才起）、叠加流的双 ffmpeg 管道也改用常驻解码器；GPU（Vulkan）验证与 NativeAOT 实测。（**FFmpeg.AutoGen 已评估后暂缓**：8.1.0 可对接本机 FFmpeg 8.1，但 x264 的 GPL 传染、原生库崩溃会带崩进程、~190MB 按 RID 分发、AOT/裁剪不友好；先做常驻子进程解码器，进程内 libav* 以后再做。）
-2. RTSP 推流收尾：推流侧 SR（当前只回 RR，作为纯接收方）、H.265 推流、多音频轨。
+2. RTSP 推流收尾：推流侧 SR（当前只回 RR，作为纯接收方）、多音频轨。
 3. HLS 直播转协议：目前 HLS 只用于录制（`startRecord?type=4`），`protocol.enable_hls` / `hls_demand` 仅完成配置绑定，尚未接线到播放侧；自动录也还没有 HLS 选项。
 4. 录制与运维增强（可选）：录制文件按总容量/保留天数自动清理（当前只按切片数滚动 HLS）、MP4 边录边写以支持崩溃恢复（当前收尾才写 moov）、Prometheus 指标（在线流/读者/丢帧/代理重连次数）、日志按天归档（当前按大小滚动 + `maxFiles` 兜底）。
+
+## 下一阶段计划（三期，M15–M19）
+
+**进展**：P1（H.265）、P2（管理页面）、P3（AI 通用层）已落地，259 个用例全绿；**下一步只剩 P4（国标 / JT809）**，建议拆成「国标」「JT809」两个子迭代。下面各节保留原始设计说明，并在标题下补了「落地结果 / 仍未做」。
+
+### P1（M15）H.265 / HEVC 全链路支持 ✅ 已完成
+
+**落地结果**：`Codecs/H265{NalUnit,SpsParser,Config}` + `VideoCodecConfig`（H.264/H.265 统一视图）+ `VideoCodecConfigResolver` 把原先散在各 muxer 的 codec 分支收成一处；RTSP 按 RFC 7798 打包/解包（`H265RtpDepacketizer`、`IVideoRtpDepacketizer`），SDP 带 `sprop-vps/sps/pps`；FLV/RTMP 用 codecId 12 + `hvcC`（采集与播放双向），MP4 写 `hvc1` + `hvcC`，TS/PMT 用 stream_type `0x24`，HLS/录像/转推随之生效。RTSP 推流→播放、FLV/MP4/TS 采集均有用例，SPS 解析与 hvcC 往返用真实 ffmpeg/libx265 参数集对拍（320x240 / level 60）。
+
+**仍未做**：RTMP 播放侧只写 legacy codecId 12 + `hvcC`（未实现 enhanced RTMP 的四字节扩展头）；MP4 固定 `hvc1`（未提供 `hev1` 开关）；H.265 叠加流未在真实 265 源上做端到端验证（解码走 ffmpeg 子进程，理论上与 H.264 一致）。
+
+**现状**：`CodecId.H265` 与 `getMediaList` 的 `"H265"` 字符串只是占位；`MediaTrack` 只有 `SetH264Config`；H.264 专用实现散在 `H264SpsParser` / `H264ConfigResolver` / `FlvMuxer`（AVC + `avcC`）/ `RtpPacketizer`（RFC 6184）/ `H264RtpDepacketizer` / `SdpBuilder` / `TsMuxer`（stream_type 0x1B）/ `Mp4Writer`（只写 `avcC`，注释已声明不支持 HEVC）/ `RtspPushSession` / `RtspPullClient`；RTSP SDP 解析现在明确拒绝 H265（有对应用例）。
+
+**范围（按链路）**：
+
+1. 解析层：NAL 双字节头类型解析、VPS/SPS/PPS 提取、`H265SpsParser`（profile_tier_level + conformance window → 宽高/profile）、`H265Config` 与 `H265ConfigResolver`；Annex-B 切分可复用现有 `AnnexB`。
+2. 媒体层：`MediaTrack.SetH265Config`（VPS+SPS+PPS）与配置帧写入；`MediaFrame` 的 codec 标注贯通。
+3. 入站：RTSP ANNOUNCE 解析 `H265/90000` + `sprop-vps/sps/pps`，RTP 按 **RFC 7798** 解包（单包 / AP / FU，2 字节 payload header）；RTMP 侧 FLV `codecId=12` + `hvcC`（优先 enhanced RTMP 的四字节 video header，legacy sequence header 兜底）。
+4. 出站：RTSP 播放（SDP + RFC 7798 打包）、HTTP-FLV / WS-FLV（`hvcC` + composition time）、MP4（`hvc1` + `hvcC` box）、HLS/TS（stream_type `0x24` + HEVC descriptor）、RTMP 转推。
+5. 复用侧：`RtspPullClient` 按 SDP 选择解包器（拉流代理因此自动支持 HEVC 源）；YOLO/叠加走 ffmpeg 子进程，只需把 codec 透传过去，无需改解码逻辑。
+
+**设计要点**：把上述四处硬编码收成 `IVideoCodecProfile`（`CodecId` + 参数集 + RTP 打包/解包 + 各封装的参数集写出），各 muxer 只依赖接口，今后接 AV1/H.266 不再散弹式修改。
+
+**验收**：单测覆盖—H265 SPS 解析宽高、RFC 7798 单包/AP/FU 解包、FLV `hvcC`、MP4 `hvcC` box、TS PMT `0x24`、RTSP H265 推流→播放端到端；实测—`ffmpeg -c:v libx265` 推流后 RTMP / HTTP-FLV / RTSP / MP4 / HLS 均可播。
+
+**风险**：enhanced RTMP 兼容性（老客户端只认 `codecId=12` legacy 头）；MP4 `hvc1` vs `hev1` 标签选择；浏览器对 HEVC 的支持差异（管理页面预览需回落到 FLV+扩展或提示）。
+
+### P2（M16）管理页面 ✅ 已完成
+
+**落地结果**：`WebUI/{index.html,app.js,style.css}` 作为嵌入资源打进 `ZlmSharp.MediaServer`，`AdminPageEndpoints` 映射 `GET /` 与 `GET /admin/{file}`（`http.rootPath` 下同名文件优先，便于热更新）；页面零构建、直接调用 `/index/api/*`，覆盖概览、在线流、预览播放（HTTP-FLV）、会话踢人、录像查询、拉流代理/转推、AI 结果。鉴权复用 `api.secret`（存 localStorage），路由只占 `/` 与 `/admin/*`，不遮蔽 API 与 FLV catch-all（有用例）。
+
+**仍未做**：`adminAuthBasic` 未加（目前仅 secret）；页内播放依赖 mpegts.js CDN，纯离线环境需把库放到 `www/`；没有配置编辑与日志查看面板。
+
+**现状**：`http.rootPath` / `dirMenu` 只是配置项——`UseZlmSharp` 目前**没有** `UseStaticFiles`，不存在任何页面；API 侧已覆盖流/会话/录像/代理/转推/YOLO，够页面直接用。
+
+**范围**：内置静态站点（`www/` 目录优先，缺失时回落程序集内嵌资源）+ 复用 `/index/api/*`：
+- 概览：版本/端口/在线流数/会话数/丢帧汇总；
+- 流列表：`getMediaList` + 预览播放器（HTTP-FLV，flv.js / mpegts.js 二选一）；
+- 会话：`getSessionList` / `kick_session`；
+- 录像：`startRecord` / `stopRecord` / `isRecording` / `getMp4RecordFile` / `deleteRecordFile`；
+- 代理与转推：`addStreamProxy` / `delStreamProxy` / `startPush` / `getPushList`；
+- AI：`getYoloResult` 快照 + 叠加开关；
+- 配置：只读展示当前 ini（敏感键打码）。
+
+**设计要点**：前端零构建（原生 ES module + 少量 JS，产物入库），不引入 Node 工具链；鉴权复用 `api.secret`（页面首次输入存 localStorage，请求自动带 `secret`）并新增可选 `[http] adminAuthBasic`（Basic 保护整站，回环免）；路由上媒体路径（`*.live.flv`、`/index/api/*`、WS 升级）必须优先匹配，静态资源只兜底 `/`。
+
+**验收**：`dotnet publish` 后 `http://host:8080/` 可打开概览并播放一路流；`www` 缺失走内嵌资源；非回环无 secret 时返回 401/登录页。用例：静态兜底不遮蔽 API 与 FLV 路由、admin Basic 鉴权分支、内嵌资源命中。
+
+**风险**：SPA 兜底与媒体 catch-all 路由冲突（`HttpFlvEndpoint` 本身就是 catch-all，需要顺序与后缀双重约束）；AOT 下静态资源要显式声明为嵌入资源。
+
+### P3（M17）AI 分析与叠加通用层（YOLO → 可插拔，预留 OCR 等）✅ 已完成
+
+**落地结果**：`Ai/Analysis/` 新增 `AnalysisPrimitive`（Box/Polygon/Text/Mask）、`AnalysisResult`、`AnalysisResultStore`（按流 + 分析器）、`IStreamAnalyzer` + `AnalyzerRegistry`、`IOverlayRenderer` + `BoxOverlayRenderer`/`PolygonOverlayRenderer`/`TextOverlayRenderer` + `OverlayComposer`；`YoloAnalyzer` 把检测 + IoU 跟踪适配成通用图元，`StreamYoloMonitor` 的定时结果同时写入通用存储；新增 `analyzeResult`（支持 `analyzer=` 过滤），`getYoloResult` 字段保持兼容。`FrameOverlay` 补 `DrawLine`，多边形/OCR 文本框可直接叠加。
+
+**仍未做**：定时调度仍由 YOLO 专用 `StreamYoloMonitor` 驱动，尚未改成「遍历 `AnalyzerRegistry`」的通用调度器；`ZLM_AI_*` 配置前缀未接线（YOLO 仍读 `ZLM_YOLO_*`），等第二个分析器（OCR）落地时一并收口。
+
+**现状**：`Ai/` 全部以 YOLO 命名——`YoloDetectorService`（模型加载/推理）、`YoloResultStore`（按流存快照）、`StreamYoloMonitor`（定时采样）、`YoloOverlayManager` / `YoloOverlaySession`（decode→draw→encode 双 ffmpeg）、`FrameOverlay`（只画矩形框 + 内置位图字体）、`ObjectTracker`（IoU）。其中 `FfmpegDecoderPool` / `FfmpegLiveDecoder` 本就是通用取帧设施，只是挂了 YOLO 名字。
+
+**目标分层**：
+
+1. 取帧层（去 YOLO 化，重命名沿用）：`IFrameSource`——按流取最新 RGB24 帧，常驻解码器池，分辨率变化自愈。
+2. 分析层：`IStreamAnalyzer`（`AnalyzeAsync(FrameSample, ct) → AnalysisResult`），首个实现 `YoloAnalyzer`（检测/姿态/分割），后续 `OcrAnalyzer`（文本检测 + 识别）、`LprAnalyzer`（车牌）等；`AnalyzerRegistry` 决定每路流开哪些分析器，`StreamAnalyzerMonitor` 统一调度与限频。
+3. 叠加层：`IOverlayRenderer`（把 `AnalysisResult` 画到 RGB 帧），已有框渲染器改名 `BoxOverlayRenderer`，新增 `TextOverlayRenderer`（OCR 多边形/文本）、`PolygonOverlayRenderer`（布防区域，顺带覆盖 M13）。
+4. 数据模型：`AnalysisResult` 由通用图元 `AnalysisPrimitive`（`Box` / `Polygon` / `Text` / `Mask` + `Label` / `Score` / `TrackId` / `Attributes`）组成；`YoloResult` 变为其特化适配，`getYoloResult` 字段保持兼容，新增 `analyzeResult?analyzer=`。
+
+**配置**：`.env` 的 `ZLM_YOLO_*` 收敛为 `ZLM_AI_*`（旧名保留兼容），按 analyzer 分段给模型/设备/阈值/采样间隔。
+
+**验收**：现有 238 用例零回归、旧 API 字段不变；新增用例——`AnalysisPrimitive` 组合、`TextOverlayRenderer` 不越界、`analyzeResult` 过滤、同流双分析器并存的叠加合成；OCR 先用占位实现跑通管道，模型选型（PaddleOCR ONNX 本地推理 vs 云 API）单独评估后再替换。
+
+**风险**：改动面广但机械（约 15 个文件 + API + 配置），容易在兼容层留双份结构；OCR 如果不追求本地推理，可以先用「外部 HTTP 分析器」适配器，避免又背一个原生依赖。
+
+### P4（M18/M19）国标 GB/T 28181 与 JT/T 809 接入
+
+**现状**：无 SIP、无 PS 解复用；`Jt809` 相关能力为零（也没有数据库）。好消息是 `MediaSource` 只认「H.264/AAC 帧」，接入层只要能拆成 `MediaFrame` 就能复用播放/录像/转推/代理/YOLO 全链路。
+
+**GB/T 28181（M18，先做平台侧）**：
+
+1. SIP 信令（UDP + TCP）：`REGISTER`（Digest 鉴权）、`MESSAGE`（Keepalive / Catalog 查询与响应）、`INVITE`/`ACK`/`BYE`（实时点播）；设备侧与平台侧先做一侧——平台侧：设备注册后由本服务 `INVITE`，让设备把 PS 流推到本机。
+2. 媒体接入：RTP 收流端口池（新增 `general.rtpPortRange`），`PsDemuxer` 解析 PS（`0xE0` 视频 → H.264/H.265 Annex-B，`0xBD` 私有流 → G.711/AAC），按 SSRC 关联 SIP 会话后写入 `MediaSource`。
+3. 能力面：`getMediaList` 的 `originType=gb28181`；设备/通道列表 API；录像回放（INVITE + 回放控制，二期）。
+4. 设计要点：新增 `src/ZlmSharp/Protocols/Gb28181/`，SIP 编解码自己写（复用 `RtspMessageReader` 的「按行头 + Content-Length」思路，避免引入重量级 SIP 库）；PS 解复用做成纯字节流 → 帧序列的函数，单测不依赖网络。
+
+**JT/T 809（M19，非媒体协议）**：
+
+1. 首期只做「接入侧」：TCP 长连接 + 报文头（`0x5B`/`0x5D`、消息 ID、子包、加密、长度、校验码），上行处理 车辆注册 / 实时定位 / 报警 三类报文，落内存表（可选 SQLite 持久化，不为一条协议引入 ORM）。
+2. 对外：`getVehicles` / `getTrack` 查询 API，并与媒体流按「设备号/车牌」弱关联，供管理页面把「车」和「流」放在同一视图里看。
+3. 设计要点：`src/ZlmSharp/Protocols/Jt809/`，报文编解码纯函数化（便于与标准样例对拍）；`Jt809Server`（`IHostedService`）+ 会话表管理连接与心跳；与媒体链路完全解耦，异常不影响推流。
+
+**验收**：国标用 PS/RTP 模拟器（或抓包回放）跑通「注册 → INVITE → 收流 → 可播放」最小闭环；JT809 用构造报文单测 + 标准样例对拍（头/校验/分包/粘包边界）。
+
+**风险**：两套规范版本差异大（国标 2016 vs 2022、JT809 2011 vs 2019），首期只做最小闭环并明确「非全量合规」；国标 UDP 收流对 NAT/端口池要求高，建议同时支持 TCP 被动/主动模式各一条路径再扩展。

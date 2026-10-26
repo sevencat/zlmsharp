@@ -167,7 +167,14 @@ ZLM_YOLO_TEST_MODEL=<path-to.onnx> dotnet test --filter YoloModelSmokeTests
 - MP4 需要停止录制后才可播放（moov 在收尾时写），要对崩溃宽容请用 FLV。
 - 单进程、状态在内存：无集群，无 RTSP/RTMP over SSL，无 WebRTC。
 
-进度与路线图见 `workplan.md`（已被 `.gitignore` 排除，不入库）。
+## 路线图
+
+进度与详细设计见 `workplan.md`（已被 `.gitignore` 排除，不入库）。下一阶段：
+
+1. **H.265/HEVC 全链路**：VPS/SPS/PPS 解析、RFC 7798 RTP、FLV `hvcC`、MP4 `hvc1`、TS `0x24`、RTSP/RTMP 推流播放与转推。
+2. **管理页面**：内置静态站点（前端零构建），复用现有 `/index/api/*`，覆盖流/会话/录像/代理转推/AI 结果。
+3. **AI 通用层**：拆成取帧 / `IStreamAnalyzer` / `IOverlayRenderer` 三层，YOLO 变成一个插件，后续可加 OCR、车牌、区域布防等分析器。
+4. **国标 GB/T 28181 与 JT/T 809**：SIP + PS over RTP 摄像头接入，以及车辆注册/定位/报警报文接入。
 
 ## 许可证
 

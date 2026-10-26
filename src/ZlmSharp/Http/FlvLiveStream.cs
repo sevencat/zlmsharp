@@ -16,7 +16,7 @@ internal static class FlvLiveStream
 {
     public static async Task<(int Frames, long Bytes)> RunAsync(
         MediaSource source,
-        H264Config config,
+        VideoCodecConfig config,
         FlvMetadata metadata,
         FlvWriteHandler write,
         CancellationToken cancellationToken)

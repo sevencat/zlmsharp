@@ -1,6 +1,7 @@
 using System.Buffers;
 using ZlmSharp.Codecs;
 using ZlmSharp.Core;
+using ZlmSharp.Protocols.Flv;
 
 namespace ZlmSharp.Protocols.Rtmp;
 
@@ -16,7 +17,7 @@ public sealed class FlvFrameIngest
     private readonly MediaSource _source;
     private readonly RtmpLogHandler? _log;
 
-    private H264Config? _h264;
+    private VideoCodecConfig? _config;
     private bool _warnedUnsupportedVideo;
 
     public FlvFrameIngest(MediaSource source, RtmpLogHandler? log = null)
@@ -27,7 +28,10 @@ public sealed class FlvFrameIngest
     }
 
     /// <summary>当前 H.264 参数集（收到 AVC sequence header 后才有值）。</summary>
-    public H264Config? H264 => _h264;
+    public H264Config? H264 => _config?.H264;
+
+    /// <summary>当前视频参数集：H.264（AVC）或 H.265（HEVC）。</summary>
+    public VideoCodecConfig? VideoConfig => _config;
 
     public void Video(ReadOnlySpan<byte> payload, long dts)
     {
@@ -38,12 +42,13 @@ public sealed class FlvFrameIngest
 
         var frameType = (payload[0] >> 4) & 0x0F;
         var codecId = payload[0] & 0x0F;
-        if (codecId != RtmpConstants.FlvCodecAvc)
+        var isHevc = codecId == FlvConstants.VideoCodecHevc;
+        if (codecId != FlvConstants.VideoCodecAvc && !isHevc)
         {
             if (!_warnedUnsupportedVideo)
             {
                 _warnedUnsupportedVideo = true;
-                Log(RtmpLogLevel.Warning, $"暂不支持的 RTMP 视频编码 id={codecId}（仅支持 H.264）");
+                Log(RtmpLogLevel.Warning, $"暂不支持的 RTMP 视频编码 id={codecId}（支持 H.264 / H.265）");
             }
 
             return;
@@ -54,13 +59,42 @@ public sealed class FlvFrameIngest
 
         if (packetType == 0)
         {
-            if (!H264Avcc.TryParseConfigRecord(body, out var config, out var error) || config is null)
+            if (isHevc)
             {
-                Log(RtmpLogLevel.Warning, $"RTMP AVC 配置解析失败: {error}");
+                if (!H265Config.TryParseConfigRecord(body, out var h265, out var error) || h265 is null)
+                {
+                    Log(RtmpLogLevel.Warning, $"RTMP HEVC 配置解析失败: {error}");
+                    return;
+                }
+
+                _config = VideoCodecConfig.FromH265(h265);
+                _source.Video.SetCodec(CodecId.H265);
+                _source.Video.SetH265Config(h265.Vps, h265.Sps, h265.Pps);
+                if (H265SpsParser.TryParse(h265.Sps, out var h265Info, out _) && h265Info is not null)
+                {
+                    _source.Video.SetVideoSize(h265Info.Width, h265Info.Height);
+                }
+
+                _source.AddFrame(MediaFrame.Create(
+                    h265.BuildAnnexBParameterSets(),
+                    TrackType.Video,
+                    CodecId.H265,
+                    dts,
+                    dts,
+                    FrameFlags.Config | FrameFlags.Key));
+
+                Log(RtmpLogLevel.Info,
+                    $"RTMP 收到 HEVC 配置 {_source.Video.Width}x{_source.Video.Height} vps={h265.Vps.Length} sps={h265.Sps.Length}");
                 return;
             }
 
-            _h264 = config;
+            if (!H264Avcc.TryParseConfigRecord(body, out var config, out var avcError) || config is null)
+            {
+                Log(RtmpLogLevel.Warning, $"RTMP AVC 配置解析失败: {avcError}");
+                return;
+            }
+
+            _config = VideoCodecConfig.FromH264(config);
             _source.Video.SetCodec(CodecId.H264);
             _source.Video.SetH264Config(config.Sps, config.Pps);
             if (H264SpsParser.TryParse(config.Sps, out var info, out _) && info is not null)
@@ -87,7 +121,7 @@ public sealed class FlvFrameIngest
             return;
         }
 
-        var lengthSize = _h264?.LengthSize ?? 4;
+        var lengthSize = _config?.LengthSize ?? 4;
         var writer = new ArrayBufferWriter<byte>(body.Length + 32);
         try
         {
@@ -98,16 +132,19 @@ public sealed class FlvFrameIngest
         }
         catch (InvalidDataException exception)
         {
-            Log(RtmpLogLevel.Warning, $"RTMP AVC 样本非法: {exception.Message}");
+            Log(RtmpLogLevel.Warning, $"RTMP {(isHevc ? "HEVC" : "AVC")} 样本非法: {exception.Message}");
             return;
         }
 
         var compositionTime = ReadInt24(payload, 2);
-        var isKeyFrame = frameType == 1 || H264Avcc.ContainsIdr(body, lengthSize);
+        var isKeyFrame = frameType == 1 || (isHevc
+            ? ContainsH265KeyFrame(body, lengthSize)
+            : H264Avcc.ContainsIdr(body, lengthSize));
+
         _source.AddFrame(MediaFrame.Create(
             writer.WrittenSpan,
             TrackType.Video,
-            CodecId.H264,
+            isHevc ? CodecId.H265 : CodecId.H264,
             dts,
             dts + compositionTime,
             isKeyFrame ? FrameFlags.Key : FrameFlags.None));
@@ -158,6 +195,36 @@ public sealed class FlvFrameIngest
             _source.Audio.SetCodec(CodecId.Aac);
             _source.AddFrame(MediaFrame.Create(body, TrackType.Audio, CodecId.Aac, dts, dts));
         }
+    }
+
+    /// <summary>扫描长度前缀样本，判断是否含 IRAP（BLA/IDR/CRA）NAL。</summary>
+    private static bool ContainsH265KeyFrame(ReadOnlySpan<byte> body, int lengthSize)
+    {
+        var offset = 0;
+        while (offset + lengthSize <= body.Length)
+        {
+            var length = 0;
+            for (var i = 0; i < lengthSize; i++)
+            {
+                length = (length << 8) | body[offset + i];
+            }
+
+            offset += lengthSize;
+            if (length <= 0 || offset + length > body.Length)
+            {
+                return false;
+            }
+
+            if (H265NalUnit.TryReadHeader(body.Slice(offset, length), out var type, out _) &&
+                H265NalUnit.IsKeyFrame(type))
+            {
+                return true;
+            }
+
+            offset += length;
+        }
+
+        return false;
     }
 
     private static (int SampleRate, int Channels) ParseAudioSpecificConfig(ReadOnlySpan<byte> asc)

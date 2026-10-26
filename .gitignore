@@ -16,3 +16,4 @@ artifacts/
 log/
 *.pdb
 /tests/ZlmSharp.Tests/TestResults
+.idea

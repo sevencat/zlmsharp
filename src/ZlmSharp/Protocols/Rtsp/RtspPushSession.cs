@@ -204,16 +204,24 @@ public sealed class RtspPushSession
         if (description.Video is { } video)
         {
             _tracks.Add(new TrackReceiver(video, isAudio: false));
-            source.Video.SetCodec(CodecId.H264);
+            source.Video.SetCodec(video.Codec);
 
             if (video.HasParameterSets)
             {
-                ApplyParameterSets(video.Sps!, video.Pps!, 0, configFrameKeyFlag: true);
-                Log(RtspLogLevel.Info, $"RTSP 收到推流配置 {key} {source.Video.Width}x{source.Video.Height}");
+                if (video.IsH265)
+                {
+                    ApplyH265ParameterSets(video.Vps!, video.Sps!, video.Pps!, 0, configFrameKeyFlag: true);
+                }
+                else
+                {
+                    ApplyParameterSets(video.Sps!, video.Pps!, 0, configFrameKeyFlag: true);
+                }
+
+                Log(RtspLogLevel.Info, $"RTSP 收到推流配置 {key} {video.Encoding} {source.Video.Width}x{source.Video.Height}");
             }
             else
             {
-                Log(RtspLogLevel.Info, $"RTSP 开始推流 {key}（等待带内 SPS/PPS）");
+                Log(RtspLogLevel.Info, $"RTSP 开始推流 {key}（等待带内参数集）");
             }
         }
 
@@ -612,7 +620,7 @@ public sealed class RtspPushSession
         _source.AddFrame(MediaFrame.Create(
             accessUnit,
             TrackType.Video,
-            CodecId.H264,
+            receiver.Track.Codec,
             dts,
             dts,
             keyFrame ? FrameFlags.Key : FrameFlags.None));
@@ -874,31 +882,100 @@ public sealed class RtspPushSession
 
     private void EnsureInBandConfig(byte[] accessUnit, long dts)
     {
-        if (_source is null || _source.Video.Sps is not null)
+        if (_source is null)
         {
             return;
         }
 
+        var track = _source.Video;
+        var hevc = track.CodecId == CodecId.H265;
+        if (hevc ? track.Vps is not null : track.Sps is not null)
+        {
+            return;
+        }
+
+        byte[]? vps = null;
         byte[]? sps = null;
         byte[]? pps = null;
+
         foreach (var nal in AnnexB.Split(accessUnit))
         {
-            switch (H264NalUnit.GetType(nal))
+            if (nal.Length < 2)
             {
-                case H264NalUnitType.Sps:
-                    sps ??= nal;
-                    break;
-                case H264NalUnitType.Pps:
-                    pps ??= nal;
-                    break;
+                continue;
+            }
+
+            if (hevc)
+            {
+                if (!H265NalUnit.TryReadHeader(nal, out var type, out _))
+                {
+                    continue;
+                }
+
+                switch (type)
+                {
+                    case H265NalUnitType.Vps:
+                        vps ??= nal;
+                        break;
+                    case H265NalUnitType.Sps:
+                        sps ??= nal;
+                        break;
+                    case H265NalUnitType.Pps:
+                        pps ??= nal;
+                        break;
+                }
+            }
+            else
+            {
+                switch (H264NalUnit.GetType(nal))
+                {
+                    case H264NalUnitType.Sps:
+                        sps ??= nal;
+                        break;
+                    case H264NalUnitType.Pps:
+                        pps ??= nal;
+                        break;
+                }
             }
         }
 
-        if (sps is not null && pps is not null)
+        if (hevc && vps is not null && sps is not null && pps is not null)
+        {
+            ApplyH265ParameterSets(vps, sps, pps, dts, configFrameKeyFlag: false);
+            Log(RtspLogLevel.Info, $"RTSP 从带内数据补齐 VPS/SPS/PPS {_key} {track.Width}x{track.Height}");
+            return;
+        }
+
+        if (!hevc && sps is not null && pps is not null)
         {
             ApplyParameterSets(sps, pps, dts, configFrameKeyFlag: false);
-            Log(RtspLogLevel.Info, $"RTSP 从带内数据补齐 SPS/PPS {_key} {_source.Video.Width}x{_source.Video.Height}");
+            Log(RtspLogLevel.Info, $"RTSP 从带内数据补齐 SPS/PPS {_key} {track.Width}x{track.Height}");
         }
+    }
+
+    private void ApplyH265ParameterSets(byte[] vps, byte[] sps, byte[] pps, long dts, bool configFrameKeyFlag)
+    {
+        if (_source is null)
+        {
+            return;
+        }
+
+        var config = new H265Config { Vps = vps, Sps = sps, Pps = pps };
+        _source.Video.SetH265Config(vps, sps, pps);
+
+        if (H265SpsParser.TryParse(sps, out var info, out _) && info is not null)
+        {
+            _source.Video.SetVideoSize(info.Width, info.Height);
+        }
+
+        var flags = FrameFlags.Config | (configFrameKeyFlag ? FrameFlags.Key : FrameFlags.None);
+        _source.AddFrame(MediaFrame.Create(
+            config.BuildAnnexBParameterSets(),
+            TrackType.Video,
+            CodecId.H265,
+            dts,
+            dts,
+            flags));
     }
 
     private void ApplyParameterSets(byte[] sps, byte[] pps, long dts, bool configFrameKeyFlag)
@@ -1082,7 +1159,11 @@ public sealed class RtspPushSession
         {
             Track = track;
             IsAudio = isAudio;
-            Video = isAudio ? null : new H264RtpDepacketizer();
+            Video = isAudio
+                ? null
+                : track.IsH265
+                    ? new H265RtpDepacketizer()
+                    : new H264RtpDepacketizer();
             Audio = isAudio ? new AacRtpDepacketizer() : null;
         }
 
@@ -1090,7 +1171,7 @@ public sealed class RtspPushSession
 
         public bool IsAudio { get; }
 
-        public H264RtpDepacketizer? Video { get; }
+        public IVideoRtpDepacketizer? Video { get; }
 
         public AacRtpDepacketizer? Audio { get; }
 

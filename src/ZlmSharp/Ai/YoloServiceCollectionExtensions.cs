@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
 
@@ -16,6 +17,15 @@ public static class YoloServiceCollectionExtensions
         var options = YoloOptions.FromEnv(env);
         services.AddSingleton(options);
         services.AddSingleton<YoloResultStore>();
+        services.AddSingleton<AnalysisResultStore>();
+        services.AddSingleton<AnalyzerRegistry>(provider =>
+        {
+            var registry = new AnalyzerRegistry();
+            registry.Register(provider.GetRequiredService<YoloAnalyzer>());
+            return registry;
+        });
+        services.AddSingleton(provider => new YoloAnalyzer(
+            provider.GetRequiredService<YoloDetectorService>()));
         services.AddSingleton(provider => new YoloDetectorService(
             options,
             provider.GetService<ILoggerFactory>()?.CreateLogger<YoloDetectorService>()));

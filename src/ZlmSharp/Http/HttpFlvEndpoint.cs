@@ -108,12 +108,12 @@ public static class HttpFlvEndpoint
                 return;
             }
 
-            var config = await H264ConfigResolver
+            var config = await VideoCodecConfigResolver
                 .WaitAsync(source, options.General.WaitTrackReadyMS, cancellationToken)
                 .ConfigureAwait(false);
             if (config is null)
             {
-                logger.LogWarning("FLV 拉流失败：{Key} 未就绪（缺少 SPS/PPS）", source.Key);
+                logger.LogWarning("FLV 拉流失败：{Key} 未就绪（缺少视频参数集）", source.Key);
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await context.Response.WriteAsync("stream not ready");
                 return;
@@ -144,7 +144,7 @@ public static class HttpFlvEndpoint
         HttpContext context,
         AppOptions options,
         MediaSource source,
-        H264Config config,
+        VideoCodecConfig config,
         FlvMetadata metadata,
         StreamUrl url,
         ILogger logger)
@@ -174,7 +174,7 @@ public static class HttpFlvEndpoint
     private static async Task HandleWebSocketAsync(
         HttpContext context,
         MediaSource source,
-        H264Config config,
+        VideoCodecConfig config,
         FlvMetadata metadata,
         StreamUrl url,
         ILogger logger)

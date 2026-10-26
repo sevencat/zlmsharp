@@ -11,6 +11,9 @@ public static class FlvConstants
 {
     public const byte VideoCodecAvc = 7;
 
+    /// <summary>HEVC（legacy FLV 编码 id，配合 hvcC sequence header 使用）。</summary>
+    public const byte VideoCodecHevc = 12;
+
     public const byte AudioCodecAac = 10;
 
     /// <summary>FLV header 固定 9 字节；后面紧跟 PreviousTagSize0(4)。</summary>

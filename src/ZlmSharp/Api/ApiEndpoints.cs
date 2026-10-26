@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ZlmSharp.Ai;
+using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Codecs;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
@@ -38,6 +39,7 @@ public static class ApiEndpoints
         "/index/api/yoloInfo",
         "/index/api/yoloDetect",
         "/index/api/getYoloResult",
+        "/index/api/analyzeResult",
         "/index/api/startYoloOverlay",
         "/index/api/stopYoloOverlay",
         "/index/api/getYoloOverlay",
@@ -57,6 +59,7 @@ public static class ApiEndpoints
         var sessions = endpoints.ServiceProvider.GetService<MediaSessionRegistry>();
         var detector = endpoints.ServiceProvider.GetService<YoloDetectorService>();
         var yoloStore = endpoints.ServiceProvider.GetService<YoloResultStore>();
+        var analyses = endpoints.ServiceProvider.GetService<AnalysisResultStore>();
         var overlays = endpoints.ServiceProvider.GetService<YoloOverlayManager>();
         var recorder = endpoints.ServiceProvider.GetService<RecorderManager>();
         var recordFiles = endpoints.ServiceProvider.GetService<RecordFileService>();
@@ -73,6 +76,7 @@ public static class ApiEndpoints
         endpoints.MapGet("/index/api/yoloInfo", (RequestDelegate)(context => YoloInfoAsync(context, options, detector)));
         endpoints.MapPost("/index/api/yoloDetect", (RequestDelegate)(context => YoloDetectAsync(context, options, detector)));
         endpoints.MapGet("/index/api/getYoloResult", (RequestDelegate)(context => YoloResultAsync(context, options, yoloStore)));
+        endpoints.MapGet("/index/api/analyzeResult", (RequestDelegate)(context => AnalyzeResultAsync(context, options, analyses)));
         endpoints.MapGet("/index/api/startYoloOverlay", (RequestDelegate)(context => StartYoloOverlayAsync(context, options, detector, overlays)));
         endpoints.MapGet("/index/api/stopYoloOverlay", (RequestDelegate)(context => StopYoloOverlayAsync(context, options, overlays)));
         endpoints.MapGet("/index/api/getYoloOverlay", (RequestDelegate)(context => GetYoloOverlayAsync(context, options, overlays)));
@@ -229,6 +233,66 @@ public static class ApiEndpoints
         }
 
         await WriteJsonAsync(context, new ApiYoloResultResponse(0, data), ApiJsonContext.Default.ApiYoloResultResponse);
+    }
+
+    /// <summary>通用分析结果：任意分析器（yolo / ocr / …）的最新快照，可用 <c>analyzer=</c> 过滤。</summary>
+    private static async Task AnalyzeResultAsync(HttpContext context, AppOptions options, AnalysisResultStore? store)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "analyzeResult");
+
+        var query = context.Request.Query;
+        IReadOnlyList<AnalysisResult> results = store is null
+            ? []
+            : store.List(
+                query["vhost"].ToString(),
+                query["app"].ToString(),
+                query["stream"].ToString(),
+                query["analyzer"].ToString());
+
+        var now = DateTimeOffset.UtcNow;
+        var data = new List<ApiAnalysisData>(results.Count);
+        foreach (var result in results)
+        {
+            var primitives = new List<ApiAnalysisPrimitive>(result.Primitives.Count);
+            foreach (var item in result.Primitives)
+            {
+                primitives.Add(new ApiAnalysisPrimitive(
+                    item.Kind.ToString().ToLowerInvariant(),
+                    item.Label,
+                    item.Score,
+                    item.TrackId,
+                    item.X,
+                    item.Y,
+                    item.Width,
+                    item.Height,
+                    item.Points?.Select(point => new ApiAnalysisPoint(point.X, point.Y)).ToArray(),
+                    item.Text));
+            }
+
+            data.Add(new ApiAnalysisData(
+                result.AnalyzerId,
+                result.Key.Vhost,
+                result.Key.App,
+                result.Key.Stream,
+                result.At.ToUnixTimeSeconds(),
+                (long)Math.Max(0, (now - result.At).TotalMilliseconds),
+                result.ElapsedMs,
+                result.Width,
+                result.Height,
+                primitives.Count,
+                primitives,
+                result.Error));
+        }
+
+        await WriteJsonAsync(
+            context,
+            new ApiAnalyzeResultResponse(0, null, data),
+            ApiJsonContext.Default.ApiAnalyzeResultResponse);
     }
 
     /// <summary>
@@ -1129,7 +1193,7 @@ public static class ApiEndpoints
     {
         if (source.Video.Width <= 0)
         {
-            H264ConfigResolver.Resolve(source); // 回填宽高/编码信息，便于 API 展示
+            VideoCodecConfigResolver.Resolve(source); // 回填宽高/编码信息，便于 API 展示
         }
 
         return BuildMediaInfo(source);

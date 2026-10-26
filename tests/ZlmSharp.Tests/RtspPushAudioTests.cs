@@ -64,7 +64,8 @@ public class RtspPushAudioTests
     [Fact]
     public void SdpParser_RejectsSdpWithoutSupportedTracks()
     {
-        Assert.False(SdpParser.TryParse("v=0\r\nm=video 0 RTP/AVP 98\r\na=rtpmap:98 H265/90000\r\n", out _, out var error));
+        // H.265 现已支持；真正不支持的编码仍然拒绝
+        Assert.False(SdpParser.TryParse("v=0\r\nm=video 0 RTP/AVP 98\r\na=rtpmap:98 VP8/90000\r\n", out _, out var error));
         Assert.Contains("H.264", error);
     }
 

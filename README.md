@@ -167,7 +167,14 @@ ZLM_YOLO_TEST_MODEL=<path-to.onnx> dotnet test --filter YoloModelSmokeTests
 - MP4 files are only playable after recording stops (moov is written at the end); use FLV for crash tolerance.
 - Single process, in-memory state: no clustering, no RTSP/RTMP SSL, no WebRTC.
 
-Progress and roadmap live in `workplan.md` (kept out of git by `.gitignore`).
+## Roadmap
+
+Progress and detailed design notes live in `workplan.md` (kept out of git by `.gitignore`). Next phase:
+
+1. **H.265 / HEVC end to end** — VPS/SPS/PPS parsing, RFC 7798 RTP, FLV `hvcC`, MP4 `hvc1`, TS `0x24`, RTSP/RTMP in/out and relay.
+2. **Web admin page** — built-in static site (no frontend build step) over the existing `/index/api/*`: streams, sessions, recording, proxy/relay, AI results.
+3. **Generic AI layer** — split frame source / `IStreamAnalyzer` / `IOverlayRenderer`, so YOLO becomes one plugin and OCR, license-plate or zone-intrusion analyzers can be added later.
+4. **GB/T 28181 and JT/T 809** — SIP + PS-over-RTP camera onboarding, and vehicle registration/position/alarm ingestion.
 
 ## License
 
