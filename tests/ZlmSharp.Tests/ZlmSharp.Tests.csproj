@@ -20,16 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\ZlmSharp.Ai\ZlmSharp.Ai.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Core\ZlmSharp.Core.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Codecs\ZlmSharp.Codecs.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Configuration\ZlmSharp.Configuration.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Protocols.Flv\ZlmSharp.Protocols.Flv.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Protocols.Rtmp\ZlmSharp.Protocols.Rtmp.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Protocols.Rtsp\ZlmSharp.Protocols.Rtsp.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Http\ZlmSharp.Http.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Recording\ZlmSharp.Recording.csproj" />
-    <ProjectReference Include="..\..\src\ZlmSharp.Server\ZlmSharp.Server.csproj" />
+    <ProjectReference Include="..\..\src\ZlmSharp\ZlmSharp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

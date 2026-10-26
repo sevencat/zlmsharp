@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\ZlmSharp.Server\ZlmSharp.Server.csproj" />
+    <ProjectReference Include="..\..\src\ZlmSharp\ZlmSharp.csproj" />
   </ItemGroup>
 
 </Project>

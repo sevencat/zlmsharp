@@ -5,6 +5,9 @@
     <RootNamespace>ZlmSharp.Cli</RootNamespace>
     <AssemblyName>zlmsharp</AssemblyName>
 
+    <!-- Win32 图标（assets/app.ico 由 tools/make-icon.ps1 生成），JIT 与 NativeAOT 都会写入 exe -->
+    <ApplicationIcon>..\..\assets\app.ico</ApplicationIcon>
+
     <!-- 发布即 NativeAOT；dotnet run 仍走 JIT 便于调试 -->
     <PublishAot>true</PublishAot>
     <StripSymbols>true</StripSymbols>
@@ -21,7 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ZlmSharp.Server\ZlmSharp.Server.csproj" />
+    <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
   </ItemGroup>
 
   <!-- NLog 大量使用反射（布局渲染器/目标工厂），NativeAOT 下整体保留，避免运行期丢失类型 -->

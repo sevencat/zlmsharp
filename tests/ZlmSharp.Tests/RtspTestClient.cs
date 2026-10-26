@@ -44,6 +44,15 @@ internal sealed class RtspTestClient : IAsyncDisposable
         string method,
         string uri,
         CancellationToken cancellationToken,
+        params (string Name, string Value)[] headers) =>
+        SendAsync(method, uri, null, cancellationToken, headers);
+
+    /// <summary>发送带 body 的请求（ANNOUNCE 的 SDP 用）。</summary>
+    public Task SendAsync(
+        string method,
+        string uri,
+        string? body,
+        CancellationToken cancellationToken,
         params (string Name, string Value)[] headers)
     {
         var builder = new StringBuilder(256);
@@ -56,10 +65,33 @@ internal sealed class RtspTestClient : IAsyncDisposable
             builder.Append(name).Append(": ").Append(value).Append("\r\n");
         }
 
+        var bodyBytes = body is null ? [] : Encoding.UTF8.GetBytes(body);
+        if (body is not null)
+        {
+            builder.Append("Content-Length: ").Append(bodyBytes.Length).Append("\r\n");
+        }
+
         builder.Append("\r\n");
 
-        var bytes = Encoding.UTF8.GetBytes(builder.ToString());
+        var headerBytes = Encoding.UTF8.GetBytes(builder.ToString());
+        var bytes = new byte[headerBytes.Length + bodyBytes.Length];
+        headerBytes.CopyTo(bytes, 0);
+        bodyBytes.CopyTo(bytes, headerBytes.Length);
         return WriteAsync(bytes, cancellationToken);
+    }
+
+    /// <summary>发送一帧 interleaved 数据（推流时用来发 RTP）。</summary>
+    public async Task SendInterleavedAsync(int channel, byte[] payload, CancellationToken cancellationToken)
+    {
+        var header = new byte[4];
+        header[0] = (byte)'$';
+        header[1] = (byte)channel;
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(2), (ushort)payload.Length);
+
+        var bytes = new byte[4 + payload.Length];
+        header.CopyTo(bytes, 0);
+        payload.CopyTo(bytes, 4);
+        await WriteAsync(bytes, cancellationToken);
     }
 
     public async Task<RtspTestResponse> ReadResponseAsync(CancellationToken cancellationToken)

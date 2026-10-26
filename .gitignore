@@ -15,3 +15,4 @@ artifacts/
 /zlmsharp.ini
 log/
 *.pdb
+/tests/ZlmSharp.Tests/TestResults

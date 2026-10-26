@@ -1,8 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <RootNamespace>ZlmSharp.Core</RootNamespace>
-    <AssemblyName>ZlmSharp.Core</AssemblyName>
-  </PropertyGroup>
-
-</Project>

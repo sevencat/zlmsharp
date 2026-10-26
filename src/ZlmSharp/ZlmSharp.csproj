@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ZlmSharp</RootNamespace>
+    <!-- CLI 的 exe 名固定为 zlmsharp，程序集名不能与之大小写不敏感重名，故加 MediaServer 后缀 -->
+    <AssemblyName>ZlmSharp.MediaServer</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 纯托管 YOLO 推理（未上架 nuget.org，见仓库根 nuget.config 的本地源） -->
+    <PackageReference Include="SimdYolo" Version="0.11.2" />
+    <PackageReference Include="NLog" Version="6.2.2" />
+    <PackageReference Include="NLog.Extensions.Logging" Version="6.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ZlmSharp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildTime" Value="$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))" />
+    <AssemblyMetadata Include="BranchName" Value="main" />
+    <AssemblyMetadata Include="CommitHash" Value="$(SourceRevisionId)" Condition="'$(SourceRevisionId)' != ''" />
+    <AssemblyMetadata Include="CommitHash" Value="unknown" Condition="'$(SourceRevisionId)' == ''" />
+  </ItemGroup>
+
+</Project>
