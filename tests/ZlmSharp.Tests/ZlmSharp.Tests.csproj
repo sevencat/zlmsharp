@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\ZlmSharp.Protocols.Rtmp\ZlmSharp.Protocols.Rtmp.csproj" />
     <ProjectReference Include="..\..\src\ZlmSharp.Protocols.Rtsp\ZlmSharp.Protocols.Rtsp.csproj" />
     <ProjectReference Include="..\..\src\ZlmSharp.Http\ZlmSharp.Http.csproj" />
+    <ProjectReference Include="..\..\src\ZlmSharp.Recording\ZlmSharp.Recording.csproj" />
     <ProjectReference Include="..\..\src\ZlmSharp.Server\ZlmSharp.Server.csproj" />
   </ItemGroup>
 

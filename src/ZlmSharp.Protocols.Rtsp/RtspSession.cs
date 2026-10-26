@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using ZlmSharp.Codecs;
@@ -53,10 +54,14 @@ public sealed class RtspSession
     private readonly RtspSessionOptions _options;
     private readonly RtspLogHandler? _log;
     private readonly RtspMessageReader _reader;
+    private readonly IReadOnlyList<RtspRequest>? _pendingRequests;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly RtpPacketizer _rtp;
     private readonly string _sessionId;
     private readonly IPEndPoint? _remoteEndPoint;
+    private readonly MediaHookHandler? _hook;
+    private readonly MediaSessionRegistry? _sessions;
+    private readonly string? _userAgent;
 
     private MediaSource? _source;
     private StreamKey _key;
@@ -64,11 +69,17 @@ public sealed class RtspSession
     private string _baseUri = "";
     private int _rtpChannel;
     private int _rtcpChannel = 1;
+    private CancellationTokenSource? _lifetimeCts;
+    private MediaSessionInfo? _playSession;
+    private bool _authorized;
 
     private MediaSink? _sink;
     private CancellationTokenSource? _playCts;
     private Task? _playTask;
     private long? _baseDts;
+    private long? _minDts;
+    private long? _lastSentDts;
+    private bool _started;
 
     private volatile UdpRtpTransport? _udp;
 
@@ -85,14 +96,23 @@ public sealed class RtspSession
         MediaSourceRegistry registry,
         RtspSessionOptions? options = null,
         RtspLogHandler? log = null,
-        IPEndPoint? remoteEndPoint = null)
+        IPEndPoint? remoteEndPoint = null,
+        RtspMessageReader? reader = null,
+        IReadOnlyList<RtspRequest>? pendingRequests = null,
+        MediaHookHandler? hook = null,
+        MediaSessionRegistry? sessions = null,
+        string? userAgent = null)
     {
         _stream = stream;
         _registry = registry;
         _options = options ?? new RtspSessionOptions();
         _log = log;
         _remoteEndPoint = remoteEndPoint;
-        _reader = new RtspMessageReader(stream);
+        _reader = reader ?? new RtspMessageReader(stream);
+        _pendingRequests = pendingRequests;
+        _hook = hook;
+        _sessions = sessions;
+        _userAgent = userAgent;
         _rtp = new RtpPacketizer((uint)RandomNumberGenerator.GetInt32(int.MaxValue), _options.RtpPayloadType, _options.Mtu);
         _sessionId = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
     }
@@ -101,21 +121,35 @@ public sealed class RtspSession
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        // 会话级 token：kick_session 通过取消它来强制断开连接
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _lifetimeCts = lifetime;
+        var token = lifetime.Token;
+
         try
         {
-            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             idleCts.CancelAfter(_options.HandshakeTimeout);
 
-            while (!cancellationToken.IsCancellationRequested)
+            // 监听器为识别推/拉已经读过若干条请求（通常是 OPTIONS），这里按顺序补处理
+            if (_pendingRequests is { Count: > 0 } pending)
+            {
+                foreach (var item in pending)
+                {
+                    await HandleRequestAsync(item, token).ConfigureAwait(false);
+                }
+            }
+
+            while (!token.IsCancellationRequested)
             {
                 RtspRequest? request;
                 try
                 {
-                    // 播放期间不再套用空闲超时（客户端只会周期性发 GET_PARAMETER）
-                    var token = _playTask is null ? idleCts.Token : cancellationToken;
-                    request = await _reader.ReadRequestAsync(token).ConfigureAwait(false);
+                    // 首次 PLAY 之后不再套用握手超时（播放中/PAUSE 后客户端只会周期性发 GET_PARAMETER）
+                    var readToken = _started ? token : idleCts.Token;
+                    request = await _reader.ReadRequestAsync(readToken).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
                 {
                     Log(RtspLogLevel.Warning, "RTSP 会话空闲超时");
                     break;
@@ -126,12 +160,12 @@ public sealed class RtspSession
                     break;
                 }
 
-                if (_playTask is null)
+                if (!_started)
                 {
                     idleCts.CancelAfter(_options.HandshakeTimeout);
                 }
 
-                await HandleRequestAsync(request, cancellationToken).ConfigureAwait(false);
+                await HandleRequestAsync(request, token).ConfigureAwait(false);
             }
         }
         catch (InvalidDataException exception)
@@ -144,6 +178,8 @@ public sealed class RtspSession
         }
         finally
         {
+            _lifetimeCts = null;
+            ReleasePlaySession();
             await StopPlaybackAsync().ConfigureAwait(false);
             await CloseUdpTransportAsync().ConfigureAwait(false);
         }
@@ -176,6 +212,8 @@ public sealed class RtspSession
                 break;
 
             case "PAUSE":
+                // 暂停保留会话与时间轴：下一次 PLAY 从上次发送位置继续（不重放 GOP）
+                _started = true;
                 await StopPlaybackAsync().ConfigureAwait(false);
                 await WriteResponseAsync(
                     request,
@@ -188,6 +226,8 @@ public sealed class RtspSession
 
             case "TEARDOWN":
                 await StopPlaybackAsync().ConfigureAwait(false);
+                ReleasePlaySession();
+                ResetPlaybackState();
                 await WriteResponseAsync(
                     request,
                     200,
@@ -217,6 +257,12 @@ public sealed class RtspSession
 
     private async Task HandleDescribeAsync(RtspRequest request, CancellationToken cancellationToken)
     {
+        if (!await EnsureAuthorizedAsync(request, cancellationToken).ConfigureAwait(false))
+        {
+            await WriteResponseAsync(request, 403, "Forbidden", null, null, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var source = _source ?? await ResolveSourceAsync(request.Uri, cancellationToken).ConfigureAwait(false);
         if (source is null)
         {
@@ -236,7 +282,7 @@ public sealed class RtspSession
 
         _source = source;
         _config = config;
-        _baseUri = BuildBaseUri(request.Uri);
+        _baseUri = RtspUri.BuildBaseUri(request.Uri);
 
         var sdp = SdpBuilder.BuildH264(config, _key.Stream, _options.RtpPayloadType);
         await WriteResponseAsync(
@@ -272,7 +318,7 @@ public sealed class RtspSession
             if (source is not null)
             {
                 _source = source;
-                _baseUri = string.IsNullOrEmpty(_baseUri) ? BuildBaseUri(request.Uri) : _baseUri;
+                _baseUri = string.IsNullOrEmpty(_baseUri) ? RtspUri.BuildBaseUri(request.Uri) : _baseUri;
             }
         }
 
@@ -339,6 +385,13 @@ public sealed class RtspSession
 
     private async Task HandlePlayAsync(RtspRequest request, CancellationToken cancellationToken)
     {
+        // 直接 PLAY（跳过 DESCRIBE）的客户端也走一次鉴权
+        if (!await EnsureAuthorizedAsync(request, cancellationToken).ConfigureAwait(false))
+        {
+            await WriteResponseAsync(request, 403, "Forbidden", null, null, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var source = _source ?? await ResolveSourceAsync(request.Uri, cancellationToken).ConfigureAwait(false);
         if (source is null)
         {
@@ -358,35 +411,112 @@ public sealed class RtspSession
 
         _source = source;
         _config = config;
-        _baseUri = string.IsNullOrEmpty(_baseUri) ? BuildBaseUri(request.Uri) : _baseUri;
+        _baseUri = string.IsNullOrEmpty(_baseUri) ? RtspUri.BuildBaseUri(request.Uri) : _baseUri;
 
-        var rtpInfo = $"{_baseUri}/trackID=0;seq={_rtp.SequenceNumber};rtptime=0";
+        var alreadyPlaying = _playTask is not null;
+        long? minDts = null;
+        double nptStart = 0;
+        uint startTimestamp;
+
+        if (alreadyPlaying)
+        {
+            // 重复 PLAY：只回报当前进度，不重启播放任务
+            startTimestamp = _lastRtpTimestamp;
+            if (_baseDts is { } baseDts && _lastSentDts is { } sentDts)
+            {
+                nptStart = Math.Max(0, (sentDts - baseDts) / 1000.0);
+            }
+        }
+        else if (_started && _baseDts is { } baseValue)
+        {
+            // PAUSE 后继续（或带 Range 的定位）：从目标 DTS 开始，跳过阅读器补发的更早 GOP 帧
+            var target = _lastSentDts ?? baseValue;
+            if (ParseNptSeconds(request.Header("Range")) is { } requested)
+            {
+                target = baseValue + (long)Math.Round(requested * 1000, MidpointRounding.AwayFromZero);
+            }
+
+            target = Math.Max(baseValue, target);
+            minDts = target;
+            nptStart = Math.Max(0, (target - baseValue) / 1000.0);
+            startTimestamp = (uint)Math.Max(0, (target - baseValue) * 90);
+        }
+        else
+        {
+            // 首次 PLAY：时间轴从 0 开始
+            startTimestamp = 0;
+        }
+
+        var rtpInfo = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{_baseUri}/trackID=0;seq={_rtp.SequenceNumber};rtptime={startTimestamp}");
+
         await WriteResponseAsync(
             request,
             200,
             "OK",
             [
                 ("Session", SessionHeader),
-                ("Range", "npt=0.000-"),
+                ("Range", string.Create(CultureInfo.InvariantCulture, $"npt={nptStart:F3}-")),
                 ("RTP-Info", rtpInfo),
             ],
             null,
             cancellationToken).ConfigureAwait(false);
 
         // 先回 PLAY 响应再送 RTP，避免响应被 RTP 数据挤到后面
-        if (_playTask is null)
+        if (!alreadyPlaying)
         {
+            _minDts = minDts;
             StartPlayback(source, cancellationToken);
+            _started = true;
         }
 
-        Log(RtspLogLevel.Info, $"RTSP PLAY {_key}");
+        Log(RtspLogLevel.Info, $"RTSP PLAY {_key} npt={nptStart:F3}s");
+    }
+
+    private static double? ParseNptSeconds(string? range)
+    {
+        if (string.IsNullOrWhiteSpace(range))
+        {
+            return null;
+        }
+
+        var index = range.IndexOf("npt=", StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        var value = range[(index + 4)..].Trim();
+        var dash = value.IndexOf('-');
+        if (dash >= 0)
+        {
+            value = value[..dash];
+        }
+
+        if (value.Length == 0 || value.Equals("now", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) && seconds >= 0
+            ? seconds
+            : null;
+    }
+
+    private void ResetPlaybackState()
+    {
+        _started = false;
+        _baseDts = null;
+        _minDts = null;
+        _lastSentDts = null;
+        _lastRtpTimestamp = 0;
     }
 
     private void StartPlayback(MediaSource source, CancellationToken cancellationToken)
     {
         var sink = source.CreateReader();
         _sink = sink;
-        _baseDts = null;
         _lastRtcpTicks = 0;
         _rtpPacketCount = 0;
         _rtpOctetCount = 0;
@@ -479,6 +609,12 @@ public sealed class RtspSession
 
     private async Task SendVideoFrameAsync(MediaFrame frame, CancellationToken cancellationToken)
     {
+        // PAUSE 后继续/Seek：阅读器会从关键帧补发 GOP，跳过目标位置之前的帧
+        if (_minDts is { } minDts && frame.Dts < minDts)
+        {
+            return;
+        }
+
         _baseDts ??= frame.Dts;
         var delta = Math.Max(0, frame.Dts - _baseDts.Value);
         var timestamp = (uint)(delta * 90); // 毫秒 → 90kHz
@@ -491,6 +627,7 @@ public sealed class RtspSession
         }
 
         _lastRtpTimestamp = timestamp;
+        _lastSentDts = frame.Dts;
         _rtpAnchorTicks = Stopwatch.GetTimestamp();
 
         await SendSenderReportIfDueAsync(cancellationToken).ConfigureAwait(false);
@@ -558,9 +695,89 @@ public sealed class RtspSession
         return WriteAsync(interleaved, cancellationToken);
     }
 
+    /// <summary>首次 DESCRIBE/PLAY 时调用 <c>on_play</c>；同一会话只鉴权一次。</summary>
+    private async Task<bool> EnsureAuthorizedAsync(RtspRequest request, CancellationToken cancellationToken)
+    {
+        if (_authorized || _hook is null)
+        {
+            return true;
+        }
+
+        var resolved = ResolveKey(request.Uri);
+        if (resolved is null)
+        {
+            // 地址非法：交给后续逻辑回 404
+            return true;
+        }
+
+        var key = resolved.Value;
+        _key = key;
+        Key = key;
+
+        var session = RegisterSession(key);
+        var context = new MediaHookContext(
+            "rtsp",
+            MediaHookType.Play,
+            key,
+            session?.Id ?? string.Empty,
+            _remoteEndPoint?.Address.ToString(),
+            _remoteEndPoint?.Port ?? 0,
+            MediaHookParams.Parse(request.Uri),
+            request.Header("User-Agent") ?? _userAgent);
+
+        var result = await _hook(context, cancellationToken).ConfigureAwait(false);
+        if (!result.Allow)
+        {
+            _sessions?.Unregister(session?.Id);
+            Log(RtspLogLevel.Warning, $"RTSP 播放被 hook 拒绝 {key}: {result.Message}");
+            return false;
+        }
+
+        _playSession = session;
+        _authorized = true;
+        return true;
+    }
+
+    private StreamKey? ResolveKey(string uri)
+    {
+        if (!RtspUri.TryParse(uri, out var app, out var stream, out var vhost))
+        {
+            return null;
+        }
+
+        return StreamKey.Create(vhost, app.Length > 0 ? app : _options.DefaultApp, stream);
+    }
+
+    private MediaSessionInfo? RegisterSession(StreamKey key)
+    {
+        var token = _lifetimeCts;
+        if (_sessions is null || token is null)
+        {
+            return null;
+        }
+
+        return _sessions.Register(
+            "rtsp",
+            MediaSessionType.Player,
+            key,
+            _remoteEndPoint?.Address.ToString(),
+            _remoteEndPoint?.Port ?? 0,
+            _userAgent,
+            token.Cancel);
+    }
+
+    private void ReleasePlaySession()
+    {
+        if (_playSession is { } session)
+        {
+            _playSession = null;
+            _sessions?.Unregister(session.Id);
+        }
+    }
+
     private async Task<MediaSource?> ResolveSourceAsync(string uri, CancellationToken cancellationToken)
     {
-        if (!TryParseTarget(uri, out var app, out var stream, out var vhost))
+        if (!RtspUri.TryParse(uri, out var app, out var stream, out var vhost))
         {
             Log(RtspLogLevel.Warning, $"RTSP 地址非法: {uri}");
             return null;
@@ -673,62 +890,6 @@ public sealed class RtspSession
             : first + 1;
 
         return second <= 65535;
-    }
-
-    /// <summary>解析 <c>rtsp://host:port/[vhost/]app/stream[/trackID=0]</c>。</summary>
-    private static bool TryParseTarget(string uri, out string app, out string stream, out string? vhost)
-    {
-        app = string.Empty;
-        stream = string.Empty;
-        vhost = null;
-
-        var path = uri;
-        if (uri.Contains("://", StringComparison.Ordinal))
-        {
-            if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed))
-            {
-                return false;
-            }
-
-            path = parsed.AbsolutePath;
-        }
-
-        var queryIndex = path.IndexOfAny(['?', '#']);
-        if (queryIndex >= 0)
-        {
-            path = path[..queryIndex];
-        }
-
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length > 0 && segments[^1].StartsWith("trackID", StringComparison.OrdinalIgnoreCase))
-        {
-            segments = segments[..^1];
-        }
-
-        if (segments.Length == 2)
-        {
-            app = segments[0];
-            stream = segments[1];
-        }
-        else if (segments.Length == 3)
-        {
-            vhost = segments[0];
-            app = segments[1];
-            stream = segments[2];
-        }
-        else
-        {
-            return false;
-        }
-
-        return app.Length > 0 && stream.Length > 0;
-    }
-
-    private static string BuildBaseUri(string uri)
-    {
-        var trimmed = uri.TrimEnd('/');
-        var trackIndex = trimmed.LastIndexOf("/trackID", StringComparison.OrdinalIgnoreCase);
-        return trackIndex > 0 ? trimmed[..trackIndex] : trimmed;
     }
 
     private void Log(RtspLogLevel level, string message) => _log?.Invoke(level, message);

@@ -16,6 +16,7 @@
     <ProjectReference Include="..\ZlmSharp.Http\ZlmSharp.Http.csproj" />
     <ProjectReference Include="..\ZlmSharp.Protocols.Rtmp\ZlmSharp.Protocols.Rtmp.csproj" />
     <ProjectReference Include="..\ZlmSharp.Protocols.Rtsp\ZlmSharp.Protocols.Rtsp.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Recording\ZlmSharp.Recording.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -83,6 +83,7 @@ public static class DefaultConfig
         enable_hls=0
         enable_hls_fmp4=0
         enable_mp4=0
+        enable_flv_record=0
         enable_rtsp=1
         enable_rtmp=1
         enable_ts=0
@@ -95,6 +96,18 @@ public static class DefaultConfig
         mp4_max_second=3600
         mp4_save_path=./www
         hls_save_path=./www
+
+        [hook]
+        # 媒体事件回调：推流/播放前 POST JSON 到这些地址，{"code":0} 放行，非 0 拒绝
+        enable=0
+        on_publish=
+        on_play=
+        on_stream_none_reader=
+        timeoutSec=10
+        retry=0
+        retry_delay=1000
+        # hook 不可用（超时/网络错误）时是否放行；0=拒绝（更安全）
+        fail_open=0
 
         # zlmsharp 扩展段
         [log]

@@ -15,6 +15,8 @@ public sealed class AppOptions
 
     public ProtocolOptions Protocol { get; } = new();
 
+    public HookOptions Hook { get; } = new();
+
     public LogOptions Log { get; } = new();
 
     /// <summary>来自 <c>.env</c> 的机器相关配置（ffmpeg 路径等）。</summary>
@@ -154,6 +156,9 @@ public sealed class ProtocolOptions
 
     public bool EnableMp4 { get; set; }
 
+    /// <summary>是否同时录制 FLV 原始档（默认关闭；MP4 是正式录像）。</summary>
+    public bool EnableFlvRecord { get; set; }
+
     public bool EnableRtsp { get; set; } = true;
 
     public bool EnableRtmp { get; set; } = true;
@@ -177,6 +182,39 @@ public sealed class ProtocolOptions
     public string Mp4SavePath { get; set; } = "./www";
 
     public string HlsSavePath { get; set; } = "./www";
+}
+
+/// <summary>
+/// 媒体事件钩子（对应 ZLM <c>[hook]</c>）：推/拉流前回调外部 HTTP 服务做鉴权，
+/// 响应体 <c>{"code":0}</c> 表示放行，非 0 表示拒绝。
+/// </summary>
+public sealed class HookOptions
+{
+    public bool Enable { get; set; }
+
+    /// <summary>推流鉴权地址（空表示不校验）。</summary>
+    public string OnPublish { get; set; } = string.Empty;
+
+    /// <summary>播放鉴权地址（空表示不校验）。</summary>
+    public string OnPlay { get; set; } = string.Empty;
+
+    /// <summary>无人观看时的回调地址（返回 0 表示允许关闭）。</summary>
+    public string OnStreamNoneReader { get; set; } = string.Empty;
+
+    /// <summary>hook 请求超时（秒）。</summary>
+    public int TimeoutSec { get; set; } = 10;
+
+    /// <summary>失败重试次数。</summary>
+    public int Retry { get; set; }
+
+    /// <summary>重试间隔（毫秒）。</summary>
+    public int RetryDelayMS { get; set; } = 1000;
+
+    /// <summary>hook 调用失败（超时/网络错误）时是否放行；默认关闭（拒绝，避免鉴权被绕过）。</summary>
+    public bool FailOpen { get; set; }
+
+    public bool HasAnyEndpoint =>
+        OnPublish.Length > 0 || OnPlay.Length > 0 || OnStreamNoneReader.Length > 0;
 }
 
 public sealed class LogOptions

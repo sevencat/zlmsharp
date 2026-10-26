@@ -11,6 +11,8 @@ public static class FlvConstants
 {
     public const byte VideoCodecAvc = 7;
 
+    public const byte AudioCodecAac = 10;
+
     /// <summary>FLV header 固定 9 字节；后面紧跟 PreviousTagSize0(4)。</summary>
     public const int HeaderSize = 9;
 

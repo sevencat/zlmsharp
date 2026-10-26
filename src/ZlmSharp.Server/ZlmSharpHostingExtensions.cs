@@ -8,6 +8,7 @@ using ZlmSharp.Ai;
 using ZlmSharp.Api;
 using ZlmSharp.Configuration;
 using ZlmSharp.Http;
+using ZlmSharp.Recording;
 using ZlmSharp.Server.Net;
 using MsLogLevel = Microsoft.Extensions.Logging.LogLevel;
 
@@ -32,11 +33,32 @@ public static class ZlmSharpHostingExtensions
         services.AddSingleton(runtime.Document);
         services.AddSingleton(runtime.DotEnv);
         services.AddSingleton<ZlmSharp.Core.MediaSourceRegistry>();
+        services.AddSingleton<ZlmSharp.Core.MediaSessionRegistry>();
+        services.AddSingleton<Hooks.MediaHookService>();
+        services.AddSingleton<ZlmSharp.Core.MediaHookHandler>(provider =>
+            provider.GetRequiredService<Hooks.MediaHookService>().InvokeAsync);
         services.AddZlmSharpYolo(runtime.Options.Env);
+        services.AddZlmSharpRecording();
         services.AddSingleton(provider =>
         {
             var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger("ZlmSharp.Proxy");
             return new ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager(
+                provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
+                (level, message) => logger.Log(
+                    level switch
+                    {
+                        ZlmSharp.Protocols.Rtmp.RtmpLogLevel.Debug => MsLogLevel.Debug,
+                        ZlmSharp.Protocols.Rtmp.RtmpLogLevel.Info => MsLogLevel.Information,
+                        ZlmSharp.Protocols.Rtmp.RtmpLogLevel.Warning => MsLogLevel.Warning,
+                        _ => MsLogLevel.Error,
+                    },
+                    "{Message}",
+                    message));
+        });
+        services.AddSingleton(provider =>
+        {
+            var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger("ZlmSharp.Push");
+            return new ZlmSharp.Protocols.Rtmp.RtmpPushManager(
                 provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
                 (level, message) => logger.Log(
                     level switch
@@ -72,7 +94,9 @@ public static class ZlmSharpHostingExtensions
                     new RtspListenerService(
                         runtime.Options,
                         provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
-                        provider.GetRequiredService<ILoggerFactory>()));
+                        provider.GetRequiredService<ILoggerFactory>(),
+                        provider.GetRequiredService<ZlmSharp.Core.MediaSessionRegistry>(),
+                        provider.GetRequiredService<ZlmSharp.Core.MediaHookHandler>()));
             }
 
             if (runtime.Options.Rtmp.Port > 0)
@@ -81,7 +105,9 @@ public static class ZlmSharpHostingExtensions
                     new RtmpListenerService(
                         runtime.Options,
                         provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
-                        provider.GetRequiredService<ILoggerFactory>()));
+                        provider.GetRequiredService<ILoggerFactory>(),
+                        provider.GetRequiredService<ZlmSharp.Core.MediaSessionRegistry>(),
+                        provider.GetRequiredService<ZlmSharp.Core.MediaHookHandler>()));
             }
         }
 

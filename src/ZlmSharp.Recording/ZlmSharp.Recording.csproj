@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ZlmSharp.Recording</RootNamespace>
+    <AssemblyName>ZlmSharp.Recording</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp.Codecs\ZlmSharp.Codecs.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Configuration\ZlmSharp.Configuration.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Core\ZlmSharp.Core.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Protocols.Flv\ZlmSharp.Protocols.Flv.csproj" />
+  </ItemGroup>
+
+</Project>

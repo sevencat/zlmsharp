@@ -95,6 +95,126 @@ public class RtspSessionTests
     }
 
     [Fact]
+    public async Task PauseThenPlay_ResumesFromLastTimestampAndSkipsEarlierGop()
+    {
+        var registry = new MediaSourceRegistry();
+        var key = StreamKey.Create(null, "live", "test");
+        var source = registry.GetOrCreate(key, "rtsp");
+        source.AddFrame(MediaFrame.Create(
+            TestData.AnnexBConfig(), TrackType.Video, CodecId.H264, 0, 0, FrameFlags.Config | FrameFlags.Key));
+        source.AddFrame(MediaFrame.Create(
+            TestData.AnnexBKeyFrame(), TrackType.Video, CodecId.H264, 0, 0, FrameFlags.Key));
+
+        var (listener, serverTask, port) = StartSessionServer(registry);
+
+        try
+        {
+            using var cts = new CancellationTokenSource(Timeout);
+            var client = await RtspTestClient.ConnectAsync("127.0.0.1", port, cts.Token);
+            var baseUri = $"rtsp://127.0.0.1:{port}/live/test";
+            var trackUri = baseUri + "/trackID=0";
+
+            try
+            {
+                await client.SendAsync("DESCRIBE", baseUri, cts.Token, ("Accept", "application/sdp"));
+                Assert.Equal(200, (await client.ReadResponseAsync(cts.Token)).StatusCode);
+
+                await client.SendAsync(
+                    "SETUP",
+                    trackUri,
+                    cts.Token,
+                    ("Transport", "RTP/AVP/TCP;unicast;interleaved=0-1"));
+                Assert.Equal(200, (await client.ReadResponseAsync(cts.Token)).StatusCode);
+
+                await client.SendAsync("PLAY", trackUri, cts.Token, ("Range", "npt=0.000-"));
+                var play = await client.ReadResponseAsync(cts.Token);
+                Assert.Equal(200, play.StatusCode);
+                Assert.Equal("npt=0.000-", play.Header("Range"));
+
+                var first = await client.ReadInterleavedPayloadAsync(0, cts.Token);
+                Assert.Equal(0u, BinaryPrimitives.ReadUInt32BigEndian(first.AsSpan(4)));
+
+                source.AddFrame(MediaFrame.Create(
+                    TestData.AnnexBInterFrame(), TrackType.Video, CodecId.H264, 40, 40));
+                var second = await client.ReadInterleavedPayloadAsync(0, cts.Token);
+                Assert.Equal(3600u, BinaryPrimitives.ReadUInt32BigEndian(second.AsSpan(4)));
+
+                await client.SendAsync("PAUSE", trackUri, cts.Token);
+                var pause = await client.ReadResponseAsync(cts.Token);
+                Assert.Equal(200, pause.StatusCode);
+                Assert.NotNull(pause.Header("Session"));
+
+                // 暂停期间时间轴继续推进；恢复时应跳过目标点之前的 GOP 帧
+                source.AddFrame(MediaFrame.Create(
+                    TestData.AnnexBInterFrame(), TrackType.Video, CodecId.H264, 80, 80));
+                source.AddFrame(MediaFrame.Create(
+                    TestData.AnnexBInterFrame(), TrackType.Video, CodecId.H264, 120, 120));
+
+                await client.SendAsync("PLAY", trackUri, cts.Token);
+                var resume = await client.ReadResponseAsync(cts.Token);
+                Assert.Equal(200, resume.StatusCode);
+                Assert.Equal("npt=0.040-", resume.Header("Range"));
+
+                var rtpInfo = resume.Header("RTP-Info")!;
+                var advertisedSeq = ParseRtpInfoNumber(rtpInfo, "seq=");
+                var advertisedTime = ParseRtpInfoNumber(rtpInfo, "rtptime=");
+                Assert.Equal(3600, advertisedTime);
+
+                // 恢复后的第一个包：seq/rtptime 与 RTP-Info 一致（允许重复最后发送的那一帧）
+                var resumed = await client.ReadInterleavedPayloadAsync(0, cts.Token);
+                Assert.Equal((int)advertisedSeq, BinaryPrimitives.ReadUInt16BigEndian(resumed.AsSpan(2)));
+                Assert.Equal((uint)advertisedTime, BinaryPrimitives.ReadUInt32BigEndian(resumed.AsSpan(4)));
+
+                var next = await client.ReadInterleavedPayloadAsync(0, cts.Token);
+                Assert.Equal(7200u, BinaryPrimitives.ReadUInt32BigEndian(next.AsSpan(4)));
+
+                // 带 Range 的定位：直接跳到 120ms
+                await client.SendAsync("PAUSE", trackUri, cts.Token);
+                Assert.Equal(200, (await client.ReadResponseAsync(cts.Token)).StatusCode);
+
+                await client.SendAsync("PLAY", trackUri, cts.Token, ("Range", "npt=0.120-"));
+                var seek = await client.ReadResponseAsync(cts.Token);
+                Assert.Equal(200, seek.StatusCode);
+                Assert.Equal("npt=0.120-", seek.Header("Range"));
+                Assert.Equal(10800, ParseRtpInfoNumber(seek.Header("RTP-Info")!, "rtptime="));
+
+                var seeked = await client.ReadInterleavedPayloadAsync(0, cts.Token);
+                Assert.Equal(10800u, BinaryPrimitives.ReadUInt32BigEndian(seeked.AsSpan(4)));
+
+                await client.SendAsync("TEARDOWN", trackUri, cts.Token);
+                Assert.Equal(200, (await client.ReadResponseAsync(cts.Token)).StatusCode);
+            }
+            finally
+            {
+                await client.DisposeAsync();
+            }
+
+            await serverTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, source.ReaderCount);
+        }
+        finally
+        {
+            listener.Stop();
+            source.Close();
+        }
+    }
+
+    private static long ParseRtpInfoNumber(string rtpInfo, string key)
+    {
+        var index = rtpInfo.IndexOf(key, StringComparison.Ordinal);
+        Assert.True(index >= 0, $"RTP-Info 缺少 {key}: {rtpInfo}");
+        var start = index + key.Length;
+        var end = start;
+        while (end < rtpInfo.Length && char.IsAsciiDigit(rtpInfo[end]))
+        {
+            end++;
+        }
+
+        Assert.True(end > start, $"RTP-Info 的 {key} 不是数字: {rtpInfo}");
+        return long.Parse(rtpInfo[start..end], System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    [Fact]
     public async Task Setup_UnsupportedTransport_Returns461()
     {
         var registry = new MediaSourceRegistry();

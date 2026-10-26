@@ -32,14 +32,18 @@ public static class HttpFlvEndpoint
     {
         var registry = context.RequestServices.GetRequiredService<MediaSourceRegistry>();
         var options = context.RequestServices.GetRequiredService<AppOptions>();
+        var sessions = context.RequestServices.GetService<MediaSessionRegistry>();
+        var hook = context.RequestServices.GetService<MediaHookHandler>();
         var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ZlmSharp.HttpFlv");
-        return HandleCoreAsync(context, options, registry, logger);
+        return HandleCoreAsync(context, options, registry, sessions, hook, logger);
     }
 
     private static async Task HandleCoreAsync(
         HttpContext context,
         AppOptions options,
         MediaSourceRegistry registry,
+        MediaSessionRegistry? sessions,
+        MediaHookHandler? hook,
         ILogger logger)
     {
         if (context.Request.Path.Value is not { } requestPath ||
@@ -52,42 +56,88 @@ public static class HttpFlvEndpoint
             return;
         }
 
-        var cancellationToken = context.RequestAborted;
+        var schema = context.WebSockets.IsWebSocketRequest ? "ws-flv" : "http-flv";
+        var remoteIp = context.Connection.RemoteIpAddress?.ToString();
+        var remotePort = context.Connection.RemotePort;
+        var userAgent = context.Request.Headers.UserAgent.ToString();
 
-        var source = await WaitForSourceAsync(registry, url.Key, options.General.MaxStreamWaitMS, cancellationToken)
-            .ConfigureAwait(false);
-        if (source is null)
+        // 会话级 token：kick_session 取消它即可断开这条拉流
+        using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+        var cancellationToken = sessionCts.Token;
+
+        var session = sessions?.Register(
+            schema,
+            MediaSessionType.Player,
+            url.Key,
+            remoteIp,
+            remotePort,
+            userAgent,
+            sessionCts.Cancel);
+
+        try
         {
-            logger.LogInformation("FLV 拉流失败：流不存在 {Url}", url);
-            await WriteNotFoundAsync(context, $"stream not found: {url.Key}");
-            return;
+            if (hook is not null)
+            {
+                var hookContext = new MediaHookContext(
+                    schema,
+                    MediaHookType.Play,
+                    url.Key,
+                    session?.Id ?? string.Empty,
+                    remoteIp,
+                    remotePort,
+                    MediaHookParams.Parse(context.Request.QueryString.Value),
+                    userAgent);
+
+                var hookResult = await hook(hookContext, cancellationToken).ConfigureAwait(false);
+                if (!hookResult.Allow)
+                {
+                    logger.LogWarning("FLV 拉流被 hook 拒绝 {Url}: {Message}", url, hookResult.Message);
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    context.Response.ContentType = "text/plain; charset=utf-8";
+                    await context.Response.WriteAsync("forbidden", cancellationToken);
+                    return;
+                }
+            }
+
+            var source = await WaitForSourceAsync(registry, url.Key, options.General.MaxStreamWaitMS, cancellationToken)
+                .ConfigureAwait(false);
+            if (source is null)
+            {
+                logger.LogInformation("FLV 拉流失败：流不存在 {Url}", url);
+                await WriteNotFoundAsync(context, $"stream not found: {url.Key}");
+                return;
+            }
+
+            var config = await H264ConfigResolver
+                .WaitAsync(source, options.General.WaitTrackReadyMS, cancellationToken)
+                .ConfigureAwait(false);
+            if (config is null)
+            {
+                logger.LogWarning("FLV 拉流失败：{Key} 未就绪（缺少 SPS/PPS）", source.Key);
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await context.Response.WriteAsync("stream not ready");
+                return;
+            }
+
+            var metadata = new FlvMetadata
+            {
+                Width = source.Video.Width,
+                Height = source.Video.Height,
+                FrameRate = source.Video.Fps > 0 ? source.Video.Fps : 25,
+            };
+
+            if (context.WebSockets.IsWebSocketRequest)
+            {
+                await HandleWebSocketAsync(context, source, config, metadata, url, logger).ConfigureAwait(false);
+                return;
+            }
+
+            await HandleHttpAsync(context, options, source, config, metadata, url, logger).ConfigureAwait(false);
         }
-
-        var config = await H264ConfigResolver
-            .WaitAsync(source, options.General.WaitTrackReadyMS, cancellationToken)
-            .ConfigureAwait(false);
-        if (config is null)
+        finally
         {
-            logger.LogWarning("FLV 拉流失败：{Key} 未就绪（缺少 SPS/PPS）", source.Key);
-            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            await context.Response.WriteAsync("stream not ready");
-            return;
+            sessions?.Unregister(session?.Id);
         }
-
-        var metadata = new FlvMetadata
-        {
-            Width = source.Video.Width,
-            Height = source.Video.Height,
-            FrameRate = source.Video.Fps > 0 ? source.Video.Fps : 25,
-        };
-
-        if (context.WebSockets.IsWebSocketRequest)
-        {
-            await HandleWebSocketAsync(context, source, config, metadata, url, logger).ConfigureAwait(false);
-            return;
-        }
-
-        await HandleHttpAsync(context, options, source, config, metadata, url, logger).ConfigureAwait(false);
     }
 
     private static async Task HandleHttpAsync(

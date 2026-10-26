@@ -33,6 +33,25 @@ public sealed record ApiMediaListResponse(int Code, IReadOnlyList<ApiMediaInfo> 
 
 public sealed record ApiCloseStreamsResponse(int Code, int Count, bool Closed);
 
+/// <summary>一个在线会话（推流端或播放端）。</summary>
+public sealed record ApiSessionInfo(
+    string Id,
+    string Schema,
+    string Type,
+    string Vhost,
+    string App,
+    string Stream,
+    string Ip,
+    int Port,
+    long AliveSecond,
+    string? UserAgent);
+
+public sealed record ApiSessionListResponse(int Code, IReadOnlyList<ApiSessionInfo> Data);
+
+public sealed record ApiKickSessionData(int Count, IReadOnlyList<string> Ids);
+
+public sealed record ApiKickSessionResponse(int Code, ApiKickSessionData Data);
+
 /// <summary>一个 YOLO 检测框（原图像素坐标，左上角 + 宽高）。</summary>
 public sealed record ApiYoloObject(
     int ClassId,
@@ -111,6 +130,49 @@ public sealed record ApiYoloOverlayListResponse(int Code, IReadOnlyList<ApiYoloO
 public sealed record ApiYoloOverlayFlagData(bool Flag);
 
 public sealed record ApiYoloOverlayFlagResponse(int Code, ApiYoloOverlayFlagData Data);
+
+/// <summary>一路录像的状态（路径是当前切片）。</summary>
+public sealed record ApiRecordData(
+    string Vhost,
+    string App,
+    string Stream,
+    string State,
+    bool Mp4,
+    bool Flv,
+    string? Mp4Path,
+    string? FlvPath,
+    long Frames,
+    long DurationMs,
+    long StartedAt,
+    string? Error);
+
+public sealed record ApiRecordResponse(int Code, string? Msg, ApiRecordData? Data);
+
+public sealed record ApiRecordListResponse(int Code, IReadOnlyList<ApiRecordData> Data);
+
+public sealed record ApiRecordFlagData(bool Flag);
+
+public sealed record ApiRecordFlagResponse(int Code, ApiRecordFlagData Data);
+
+/// <summary>一路 RTMP 转推的状态。</summary>
+public sealed record ApiPushData(
+    string Vhost,
+    string App,
+    string Stream,
+    string Url,
+    string State,
+    long Frames,
+    long StartedAt,
+    long ElapsedMs,
+    string? Error);
+
+public sealed record ApiPushResponse(int Code, string? Msg, ApiPushData? Data);
+
+public sealed record ApiPushListResponse(int Code, IReadOnlyList<ApiPushData> Data);
+
+public sealed record ApiPushFlagData(bool Flag);
+
+public sealed record ApiPushFlagResponse(int Code, ApiPushFlagData Data);
 
 public sealed record ApiProxyKeyData(string Key);
 

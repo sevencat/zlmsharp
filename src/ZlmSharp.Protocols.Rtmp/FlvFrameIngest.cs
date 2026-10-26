@@ -133,6 +133,7 @@ public sealed class FlvFrameIngest
         {
             var (sampleRate, channels) = ParseAudioSpecificConfig(body);
             _source.Audio.SetCodec(CodecId.Aac);
+            _source.Audio.SetAudioConfig(body);
             if (sampleRate > 0)
             {
                 _source.Audio.SetAudioInfo(sampleRate, channels);

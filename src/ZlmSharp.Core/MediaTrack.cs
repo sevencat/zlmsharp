@@ -30,6 +30,9 @@ public sealed class MediaTrack
     /// <summary>H.264 PPS（Annex-B 原始字节，不含起始码）。</summary>
     public byte[]? Pps { get; private set; }
 
+    /// <summary>AAC AudioSpecificConfig（录制 MP4/FLV 时写 esds / sequence header）。</summary>
+    public byte[]? AudioSpecificConfig { get; private set; }
+
     /// <summary>收到过配置帧（可解码）后为 true。</summary>
     public bool Ready { get; private set; }
 
@@ -76,6 +79,14 @@ public sealed class MediaTrack
         }
     }
 
+    public void SetAudioConfig(ReadOnlySpan<byte> audioSpecificConfig)
+    {
+        lock (_gate)
+        {
+            AudioSpecificConfig = audioSpecificConfig.ToArray();
+        }
+    }
+
     public void SetH264Config(ReadOnlySpan<byte> sps, ReadOnlySpan<byte> pps)
     {
         lock (_gate)
@@ -111,6 +122,7 @@ public sealed class MediaTrack
             Channels = 0;
             Sps = null;
             Pps = null;
+            AudioSpecificConfig = null;
             Ready = false;
             LastDts = 0;
         }

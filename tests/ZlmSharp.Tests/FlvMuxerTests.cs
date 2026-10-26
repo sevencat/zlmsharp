@@ -106,6 +106,69 @@ public class FlvMuxerTests
     }
 
     [Fact]
+    public void AudioConfigAndTags_AreWrittenWhenAudioEnabled()
+    {
+        var asc = new byte[] { 0x12, 0x10 }; // AAC-LC / 44.1kHz / stereo
+        var muxer = new FlvMuxer(
+            new H264Config { Sps = TestData.Sps720, Pps = TestData.Pps },
+            new FlvMetadata { Width = 1280, Height = 720, FrameRate = 25 },
+            asc,
+            audioSampleRate: 44100,
+            audioChannels: 2);
+
+        Assert.True(muxer.HasAudio);
+        Assert.Equal(0x05, muxer.BuildHeader()[4]); // 视频 + 音频
+
+        var configTags = FlvTagParser.ParseAll(muxer.BuildAudioConfigTag());
+        var configTag = Assert.Single(configTags);
+        Assert.Equal(FlvTagType.Audio, configTag.Type);
+        Assert.Equal(0xAF, configTag.Body[0]);
+        Assert.Equal(0, configTag.Body[1]); // AAC sequence header
+        Assert.Equal(asc, configTag.Body[2..]);
+
+        // 时间戳相对第一帧：先写 0ms 关键帧，音频 40ms 就应写成 40
+        using (var keyFrame = Frame(TestData.AnnexBKeyFrame(), 0, FrameFlags.Key))
+        {
+            Assert.True(muxer.WriteVideoTag(keyFrame, new ArrayBufferWriter<byte>(256)) > 0);
+        }
+
+        using var audio = MediaFrame.Create(
+            new byte[] { 0x21, 0x10, 0x04, 0x60 },
+            TrackType.Audio,
+            CodecId.Aac,
+            40,
+            40);
+
+        var buffer = new ArrayBufferWriter<byte>(128);
+        Assert.True(muxer.WriteAudioTag(audio, buffer) > 0);
+
+        var tag = Assert.Single(FlvTagParser.ParseAll(buffer.WrittenSpan));
+        Assert.Equal(FlvTagType.Audio, tag.Type);
+        Assert.Equal(40u, tag.Timestamp);
+        Assert.Equal(0xAF, tag.Body[0]);
+        Assert.Equal(1, tag.Body[1]); // AAC raw
+        Assert.Equal(new byte[] { 0x21, 0x10, 0x04, 0x60 }, tag.Body[2..]);
+    }
+
+    [Fact]
+    public void MetadataTag_WithAudio_ContainsAudioInfo()
+    {
+        var muxer = new FlvMuxer(
+            new H264Config { Sps = TestData.Sps720, Pps = TestData.Pps },
+            audioConfig: new byte[] { 0x12, 0x10 },
+            audioSampleRate: 44100,
+            audioChannels: 2);
+
+        var tag = Assert.Single(FlvTagParser.ParseAll(muxer.BuildMetadataTag()));
+        Assert.True(Amf0.TryDecode(tag.Body, out var values, out var error), error);
+
+        var metadata = Assert.IsType<Amf0EcmaArray>(values[1]);
+        Assert.Equal(10, metadata.GetNumberProperty("audiocodecid"));
+        Assert.Equal(44100, metadata.GetNumberProperty("audiosamplerate"));
+        Assert.Equal(1, metadata.GetNumberProperty("stereo"));
+    }
+
+    [Fact]
     public void TimestampOf_IsRelativeToFirstFrameAndWraps()
     {
         var muxer = NewMuxer();

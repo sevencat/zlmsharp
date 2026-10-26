@@ -74,6 +74,7 @@ public static class ConfigBinder
         protocol.EnableHls = document.GetBool("protocol", "enable_hls", protocol.EnableHls);
         protocol.EnableHlsFmp4 = document.GetBool("protocol", "enable_hls_fmp4", protocol.EnableHlsFmp4);
         protocol.EnableMp4 = document.GetBool("protocol", "enable_mp4", protocol.EnableMp4);
+        protocol.EnableFlvRecord = document.GetBool("protocol", "enable_flv_record", protocol.EnableFlvRecord);
         protocol.EnableRtsp = document.GetBool("protocol", "enable_rtsp", protocol.EnableRtsp);
         protocol.EnableRtmp = document.GetBool("protocol", "enable_rtmp", protocol.EnableRtmp);
         protocol.EnableTs = document.GetBool("protocol", "enable_ts", protocol.EnableTs);
@@ -86,6 +87,31 @@ public static class ConfigBinder
         protocol.Mp4MaxSecond = document.GetInt("protocol", "mp4_max_second", protocol.Mp4MaxSecond);
         protocol.Mp4SavePath = document.GetString("protocol", "mp4_save_path", protocol.Mp4SavePath);
         protocol.HlsSavePath = document.GetString("protocol", "hls_save_path", protocol.HlsSavePath);
+
+        var hook = options.Hook;
+        hook.Enable = document.GetBool("hook", "enable", hook.Enable);
+        hook.OnPublish = document.GetString("hook", "on_publish", hook.OnPublish);
+        hook.OnPlay = document.GetString("hook", "on_play", hook.OnPlay);
+        hook.OnStreamNoneReader = document.GetString("hook", "on_stream_none_reader", hook.OnStreamNoneReader);
+        hook.TimeoutSec = document.GetInt("hook", "timeoutSec", hook.TimeoutSec);
+        hook.Retry = document.GetInt("hook", "retry", hook.Retry);
+        hook.RetryDelayMS = document.GetInt("hook", "retry_delay", hook.RetryDelayMS);
+        hook.FailOpen = document.GetBool("hook", "fail_open", hook.FailOpen);
+
+        if (hook.TimeoutSec < 1)
+        {
+            hook.TimeoutSec = 10;
+        }
+
+        if (hook.Retry < 0)
+        {
+            hook.Retry = 0;
+        }
+
+        if (hook.RetryDelayMS < 0)
+        {
+            hook.RetryDelayMS = 1000;
+        }
 
         var log = options.Log;
         log.Level = document.GetInt("log", "level", log.Level);

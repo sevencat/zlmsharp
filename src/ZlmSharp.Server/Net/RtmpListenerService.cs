@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using ZlmSharp.Configuration;
@@ -12,13 +13,22 @@ internal sealed class RtmpListenerService : TcpListenerHostedService
     private readonly GeneralOptions _general;
     private readonly MediaSourceRegistry _registry;
     private readonly ILogger _sessionLogger;
+    private readonly MediaSessionRegistry? _sessions;
+    private readonly MediaHookHandler? _hook;
 
-    public RtmpListenerService(AppOptions options, MediaSourceRegistry registry, ILoggerFactory loggerFactory)
+    public RtmpListenerService(
+        AppOptions options,
+        MediaSourceRegistry registry,
+        ILoggerFactory loggerFactory,
+        MediaSessionRegistry? sessions = null,
+        MediaHookHandler? hook = null)
         : base(loggerFactory.CreateLogger("ZlmSharp.Rtmp"))
     {
         _options = options.Rtmp;
         _general = options.General;
         _registry = registry;
+        _sessions = sessions;
+        _hook = hook;
         _sessionLogger = loggerFactory.CreateLogger("ZlmSharp.Rtmp.Session");
     }
 
@@ -31,6 +41,7 @@ internal sealed class RtmpListenerService : TcpListenerHostedService
         client.NoDelay = true;
 
         await using var stream = client.GetStream();
+        var remote = client.Client.RemoteEndPoint as IPEndPoint;
         var session = new RtmpSession(
             stream,
             _registry,
@@ -40,7 +51,11 @@ internal sealed class RtmpListenerService : TcpListenerHostedService
                 MaxStreamWaitMS = _general.MaxStreamWaitMS,
                 WaitTrackReadyMS = _general.WaitTrackReadyMS,
             },
-            Log);
+            Log,
+            _hook,
+            _sessions,
+            remote?.Address.ToString(),
+            remote?.Port ?? 0);
 
         await session.RunAsync(stoppingToken).ConfigureAwait(false);
     }

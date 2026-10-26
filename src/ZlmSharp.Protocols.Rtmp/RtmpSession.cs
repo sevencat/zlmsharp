@@ -47,6 +47,11 @@ public sealed class RtmpSession
     private readonly MediaSourceRegistry _registry;
     private readonly RtmpSessionOptions _options;
     private readonly RtmpLogHandler? _log;
+    private readonly MediaHookHandler? _hook;
+    private readonly MediaSessionRegistry? _sessions;
+    private readonly string? _remoteIp;
+    private readonly int _remotePort;
+    private readonly string? _userAgent;
     private readonly RtmpChunkReader _reader = new();
     private readonly RtmpChunkWriter _writer = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -59,6 +64,9 @@ public sealed class RtmpSession
     private uint _streamId = RtmpConstants.DefaultStreamId;
     private bool _publishing;
     private long _acknowledgedBytes;
+    private CancellationTokenSource? _lifetimeCts;
+    private MediaSessionInfo? _publishSession;
+    private MediaSessionInfo? _playSession;
 
     private MediaSource? _playSource;
     private MediaSink? _playSink;
@@ -71,44 +79,59 @@ public sealed class RtmpSession
         Stream stream,
         MediaSourceRegistry registry,
         RtmpSessionOptions? options = null,
-        RtmpLogHandler? log = null)
+        RtmpLogHandler? log = null,
+        MediaHookHandler? hook = null,
+        MediaSessionRegistry? sessions = null,
+        string? remoteIp = null,
+        int remotePort = 0,
+        string? userAgent = null)
     {
         _stream = stream;
         _registry = registry;
         _options = options ?? new RtmpSessionOptions();
         _log = log;
+        _hook = hook;
+        _sessions = sessions;
+        _remoteIp = remoteIp;
+        _remotePort = remotePort;
+        _userAgent = userAgent;
     }
 
     public StreamKey? Key => _publishing ? _key : null;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        // 会话级 token：kick_session 通过取消它来强制断开连接
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _lifetimeCts = lifetime;
+        var token = lifetime.Token;
+
         try
         {
-            using (var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            using (var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
                 handshakeCts.CancelAfter(_options.HandshakeTimeout);
                 try
                 {
                     await RtmpHandshake.ServerAsync(_stream, handshakeCts.Token).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
                 {
                     Log(RtmpLogLevel.Warning, "RTMP 握手超时");
                     return;
                 }
             }
 
-            while (!cancellationToken.IsCancellationRequested)
+            while (!token.IsCancellationRequested)
             {
-                var message = await _reader.ReadMessageAsync(_stream, cancellationToken).ConfigureAwait(false);
+                var message = await _reader.ReadMessageAsync(_stream, token).ConfigureAwait(false);
                 if (message is null)
                 {
                     break;
                 }
 
-                await HandleMessageAsync(message, cancellationToken).ConfigureAwait(false);
-                await MaybeSendAcknowledgementAsync(cancellationToken).ConfigureAwait(false);
+                await HandleMessageAsync(message, token).ConfigureAwait(false);
+                await MaybeSendAcknowledgementAsync(token).ConfigureAwait(false);
             }
         }
         catch (InvalidDataException exception)
@@ -121,6 +144,7 @@ public sealed class RtmpSession
         }
         finally
         {
+            _lifetimeCts = null;
             CloseSource();
             await StopPlaybackAsync().ConfigureAwait(false);
         }
@@ -267,7 +291,19 @@ public sealed class RtmpSession
             _streamId = message.StreamId;
         }
 
-        OpenSource(streamName.Value);
+        var key = ResolveKey(streamName.Value);
+        var session = RegisterSession(MediaSessionType.Publisher, key);
+
+        if (!await AuthorizeAsync(MediaHookType.Publish, key, session, streamName.Value, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            _sessions?.Unregister(session?.Id);
+            await SendStatusAsync("NetStream.Publish.Failed", "推流鉴权失败", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        _publishSession = session;
+        OpenSource(key);
         await SendStatusAsync("NetStream.Publish.Start", $"Start publishing {_key.Stream}", cancellationToken)
             .ConfigureAwait(false);
     }
@@ -368,13 +404,70 @@ public sealed class RtmpSession
         await SendAsync(RtmpMessageType.Acknowledgement, payload, 0, 2, cancellationToken).ConfigureAwait(false);
     }
 
-    private void OpenSource(string name)
+    private StreamKey ResolveKey(string name)
+    {
+        var (stream, vhost) = SplitVhost(name);
+        var app = _app.Length > 0 ? _app : _options.DefaultApp;
+        return StreamKey.Create(vhost, app, StripQuery(stream));
+    }
+
+    private MediaSessionInfo? RegisterSession(MediaSessionType type, StreamKey key)
+    {
+        var token = _lifetimeCts;
+        if (_sessions is null || token is null)
+        {
+            return null;
+        }
+
+        return _sessions.Register("rtmp", type, key, _remoteIp, _remotePort, _userAgent, token.Cancel);
+    }
+
+    private void ReleasePlaySession()
+    {
+        if (_playSession is { } session)
+        {
+            _playSession = null;
+            _sessions?.Unregister(session.Id);
+        }
+    }
+
+    private async Task<bool> AuthorizeAsync(
+        MediaHookType type,
+        StreamKey key,
+        MediaSessionInfo? session,
+        string rawName,
+        CancellationToken cancellationToken)
+    {
+        if (_hook is null)
+        {
+            return true;
+        }
+
+        var context = new MediaHookContext(
+            "rtmp",
+            type,
+            key,
+            session?.Id ?? string.Empty,
+            _remoteIp,
+            _remotePort,
+            MediaHookParams.Parse(rawName),
+            _userAgent);
+
+        var result = await _hook(context, cancellationToken).ConfigureAwait(false);
+        if (result.Allow)
+        {
+            return true;
+        }
+
+        Log(RtmpLogLevel.Warning, $"RTMP {type} 被 hook 拒绝 {key}: {result.Message}");
+        return false;
+    }
+
+    private void OpenSource(StreamKey key)
     {
         CloseSource();
 
-        var (stream, vhost) = SplitVhost(name);
-        var app = _app.Length > 0 ? _app : _options.DefaultApp;
-        _key = StreamKey.Create(vhost, app, stream);
+        _key = key;
         _source = _registry.GetOrCreate(_key, "rtmp");
         _ingest = new FlvFrameIngest(_source, Log);
         _publishing = true;
@@ -387,6 +480,12 @@ public sealed class RtmpSession
         var source = _source;
         _source = null;
         _ingest = null;
+
+        if (_publishSession is { } session)
+        {
+            _publishSession = null;
+            _sessions?.Unregister(session.Id);
+        }
 
         if (source is null)
         {
@@ -424,13 +523,25 @@ public sealed class RtmpSession
 
         _playStreamId = message.StreamId > 0 ? message.StreamId : RtmpConstants.DefaultStreamId;
 
-        var (stream, vhost) = SplitVhost(playName.Value);
-        var app = _app.Length > 0 ? _app : _options.DefaultApp;
-        var key = StreamKey.Create(vhost, app, stream);
+        var key = ResolveKey(playName.Value);
+        var session = RegisterSession(MediaSessionType.Player, key);
+
+        if (!await AuthorizeAsync(MediaHookType.Play, key, session, playName.Value, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            _sessions?.Unregister(session?.Id);
+            await SendStatusAsync("NetStream.Play.Failed", "播放鉴权失败", cancellationToken, _playStreamId)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        _playSession = session;
+        var stream = key.Stream;
 
         var source = await WaitForSourceAsync(key, _options.MaxStreamWaitMS, cancellationToken).ConfigureAwait(false);
         if (source is null)
         {
+            ReleasePlaySession();
             Log(RtmpLogLevel.Warning, $"RTMP 播放失败：流不存在 {key}");
             await SendStatusAsync("NetStream.Play.StreamNotFound", $"stream not found: {key}", cancellationToken, _playStreamId)
                 .ConfigureAwait(false);
@@ -442,6 +553,7 @@ public sealed class RtmpSession
             .ConfigureAwait(false);
         if (config is null)
         {
+            ReleasePlaySession();
             await SendStatusAsync("NetStream.Play.Failed", "流未就绪（缺少 SPS/PPS）", cancellationToken, _playStreamId)
                 .ConfigureAwait(false);
             return;
@@ -491,6 +603,8 @@ public sealed class RtmpSession
 
     private async Task StopPlaybackAsync()
     {
+        ReleasePlaySession();
+
         var cts = _playCts;
         var task = _playTask;
         var sink = _playSink;

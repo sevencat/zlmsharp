@@ -39,6 +39,14 @@ public sealed class RtspRequest
     public override string ToString() => $"{Method} {Uri} cseq={CSeq}";
 }
 
+/// <summary>RTSP 通道上读到的一条内容：请求，或一帧 interleaved 数据（推流时是 RTP）。</summary>
+public readonly record struct RtspReadItem(RtspRequest? Request, int Channel, byte[]? Payload)
+{
+    public bool IsRequest => Request is not null;
+
+    public static RtspReadItem None => default;
+}
+
 /// <summary>
 /// RTSP 请求读取器：按行解析请求头 + Content-Length 读 body，
 /// 同时跳过客户端发来的 TCP interleaved 帧（<c>$</c> 开头的 RTCP）。
@@ -59,88 +67,115 @@ public sealed class RtspMessageReader
         _stream = stream;
     }
 
-    /// <summary>读取一条请求；连接关闭返回 null。</summary>
+    /// <summary>读取一条请求；interleaved 数据会被跳过（播放端只处理请求）。连接关闭返回 null。</summary>
     public async ValueTask<RtspRequest?> ReadRequestAsync(CancellationToken cancellationToken)
     {
         while (true)
         {
-            var first = await ReadByteAsync(cancellationToken).ConfigureAwait(false);
-            if (first < 0)
+            var item = await ReadNextAsync(cancellationToken).ConfigureAwait(false);
+            if (item.Request is null && item.Payload is null)
             {
                 return null;
             }
 
-            if (first == '$')
+            if (item.Request is not null)
             {
-                var interleavedHeader = new byte[3];
-                if (!await ReadExactAsync(interleavedHeader, cancellationToken).ConfigureAwait(false))
-                {
-                    return null;
-                }
+                return item.Request;
+            }
+        }
+    }
 
-                var length = BinaryPrimitives.ReadUInt16BigEndian(interleavedHeader.AsSpan(1));
-                if (length > 0 && !await SkipAsync(length, cancellationToken).ConfigureAwait(false))
-                {
-                    return null;
-                }
+    /// <summary>
+    /// 读取下一条内容：请求或一帧 interleaved 数据（推流端需要拿到 RTP）。连接关闭返回 <see cref="RtspReadItem.None"/>。
+    /// </summary>
+    public async ValueTask<RtspReadItem> ReadNextAsync(CancellationToken cancellationToken)
+    {
+        var first = await ReadByteAsync(cancellationToken).ConfigureAwait(false);
+        if (first < 0)
+        {
+            return RtspReadItem.None;
+        }
 
+        if (first == '$')
+        {
+            var interleavedHeader = new byte[3];
+            if (!await ReadExactAsync(interleavedHeader, cancellationToken).ConfigureAwait(false))
+            {
+                return RtspReadItem.None;
+            }
+
+            var channel = interleavedHeader[0];
+            var length = BinaryPrimitives.ReadUInt16BigEndian(interleavedHeader.AsSpan(1));
+            if (length == 0)
+            {
+                return new RtspReadItem(null, channel, []);
+            }
+
+            var payload = new byte[length];
+            return await ReadExactAsync(payload, cancellationToken).ConfigureAwait(false)
+                ? new RtspReadItem(null, channel, payload)
+                : RtspReadItem.None;
+        }
+
+        var request = await ReadRequestAsync(first, cancellationToken).ConfigureAwait(false);
+        return request is null ? RtspReadItem.None : new RtspReadItem(request, -1, null);
+    }
+
+    private async ValueTask<RtspRequest?> ReadRequestAsync(int firstByte, CancellationToken cancellationToken)
+    {
+        var requestLine = await ReadLineAsync(firstByte, cancellationToken).ConfigureAwait(false);
+        if (requestLine is null)
+        {
+            return null;
+        }
+
+        var parts = requestLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 3)
+        {
+            throw new InvalidDataException($"RTSP 请求行非法: {requestLine}");
+        }
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        while (true)
+        {
+            var line = await ReadLineAsync(-1, cancellationToken).ConfigureAwait(false);
+            if (line is null)
+            {
+                return null;
+            }
+
+            if (line.Length == 0)
+            {
+                break;
+            }
+
+            var colon = line.IndexOf(':', StringComparison.Ordinal);
+            if (colon <= 0)
+            {
                 continue;
             }
 
-            var requestLine = await ReadLineAsync(first, cancellationToken).ConfigureAwait(false);
-            if (requestLine is null)
+            headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
+        }
+
+        var body = Array.Empty<byte>();
+        if (headers.TryGetValue("Content-Length", out var lengthText) &&
+            int.TryParse(lengthText, out var contentLength) &&
+            contentLength > 0)
+        {
+            if (contentLength > MaxBodyLength)
+            {
+                throw new InvalidDataException($"RTSP body 过大: {contentLength}");
+            }
+
+            body = new byte[contentLength];
+            if (!await ReadExactAsync(body, cancellationToken).ConfigureAwait(false))
             {
                 return null;
             }
-
-            var parts = requestLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 3)
-            {
-                throw new InvalidDataException($"RTSP 请求行非法: {requestLine}");
-            }
-
-            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            while (true)
-            {
-                var line = await ReadLineAsync(-1, cancellationToken).ConfigureAwait(false);
-                if (line is null)
-                {
-                    return null;
-                }
-
-                if (line.Length == 0)
-                {
-                    break;
-                }
-
-                var colon = line.IndexOf(':', StringComparison.Ordinal);
-                if (colon <= 0)
-                {
-                    continue;
-                }
-
-                headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
-            }
-
-            var body = Array.Empty<byte>();
-            if (headers.TryGetValue("Content-Length", out var lengthText) &&
-                int.TryParse(lengthText, out var contentLength) &&
-                contentLength > 0)
-            {
-                if (contentLength > MaxBodyLength)
-                {
-                    throw new InvalidDataException($"RTSP body 过大: {contentLength}");
-                }
-
-                body = new byte[contentLength];
-                if (!await ReadExactAsync(body, cancellationToken).ConfigureAwait(false))
-                {
-                    return null;
-                }
-            }
-
-            return new RtspRequest(parts[0], parts[1], parts[2], headers, body);
         }
+
+        return new RtspRequest(parts[0], parts[1], parts[2], headers, body);
     }
 
     private async ValueTask<int> ReadByteAsync(CancellationToken cancellationToken)
@@ -214,24 +249,6 @@ public sealed class RtspMessageReader
         return true;
     }
 
-    private async ValueTask<bool> SkipAsync(int count, CancellationToken cancellationToken)
-    {
-        var scratch = new byte[Math.Min(count, 4096)];
-        var remaining = count;
-
-        while (remaining > 0)
-        {
-            var size = Math.Min(scratch.Length, remaining);
-            if (!await ReadExactAsync(scratch.AsMemory(0, size), cancellationToken).ConfigureAwait(false))
-            {
-                return false;
-            }
-
-            remaining -= size;
-        }
-
-        return true;
-    }
 }
 
 /// <summary>RTSP 响应拼装。</summary>

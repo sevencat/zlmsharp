@@ -29,18 +29,32 @@ public sealed class FlvMuxer
 {
     private readonly H264Config _config;
     private readonly FlvMetadata _metadata;
+    private readonly byte[]? _audioConfig;
+    private readonly int _audioSampleRate;
+    private readonly int _audioChannels;
     private readonly ArrayBufferWriter<byte> _scratch = new(64 * 1024);
     private readonly ArrayBufferWriter<byte> _body = new(256 * 1024);
 
     private long? _baseDts;
 
-    public FlvMuxer(H264Config config, FlvMetadata? metadata = null)
+    /// <param name="audioConfig">AAC AudioSpecificConfig；为空表示只封装视频。</param>
+    public FlvMuxer(
+        H264Config config,
+        FlvMetadata? metadata = null,
+        ReadOnlyMemory<byte> audioConfig = default,
+        int audioSampleRate = 0,
+        int audioChannels = 0)
     {
         _config = config;
         _metadata = metadata ?? new FlvMetadata();
+        _audioConfig = audioConfig.Length > 0 ? audioConfig.ToArray() : null;
+        _audioSampleRate = audioSampleRate;
+        _audioChannels = audioChannels;
     }
 
     public long? BaseDts => _baseDts;
+
+    public bool HasAudio => _audioConfig is { Length: > 0 };
 
     /// <summary>FLV header（9 字节）+ PreviousTagSize0（4 字节）。</summary>
     public byte[] BuildHeader()
@@ -50,7 +64,7 @@ public sealed class FlvMuxer
         header[1] = (byte)'L';
         header[2] = (byte)'V';
         header[3] = 1;
-        header[4] = 0x01; // flags: 只有视频（audio 位为 0）
+        header[4] = (byte)(0x01 | (HasAudio ? 0x04 : 0x00)); // flags: bit0 视频、bit2 音频
         header[5] = 0;
         header[6] = 0;
         header[7] = 0;
@@ -66,7 +80,7 @@ public sealed class FlvMuxer
         var writer = _scratch;
 
         WriteAmfString(writer, "onMetaData");
-        WriteAmfEcmaArrayHeader(writer, 6);
+        WriteAmfEcmaArrayHeader(writer, HasAudio ? 10 : 6);
 
         WriteAmfPropertyName(writer, "duration");
         WriteAmfNumber(writer, _metadata.Duration);
@@ -78,6 +92,19 @@ public sealed class FlvMuxer
         WriteAmfNumber(writer, FlvConstants.VideoCodecAvc);
         WriteAmfPropertyName(writer, "framerate");
         WriteAmfNumber(writer, _metadata.FrameRate <= 0 ? 25 : _metadata.FrameRate);
+
+        if (HasAudio)
+        {
+            WriteAmfPropertyName(writer, "audiocodecid");
+            WriteAmfNumber(writer, FlvConstants.AudioCodecAac);
+            WriteAmfPropertyName(writer, "audiosamplerate");
+            WriteAmfNumber(writer, _audioSampleRate);
+            WriteAmfPropertyName(writer, "audiosamplesize");
+            WriteAmfNumber(writer, 16);
+            WriteAmfPropertyName(writer, "stereo");
+            WriteAmfNumber(writer, _audioChannels > 1 ? 1 : 0);
+        }
+
         WriteAmfPropertyName(writer, "encoder");
         WriteAmfString(writer, _metadata.Encoder);
 
@@ -103,6 +130,68 @@ public sealed class FlvMuxer
 
     /// <summary>video tag：AVCDecoderConfigurationRecord（AVCPacketType=0）。</summary>
     public byte[] BuildAvcConfigTag() => BuildTag(FlvTagType.Video, 0, BuildAvcConfigBody());
+
+    /// <summary>audio tag 的 body：AAC sequence header（AACPacketType=0）。</summary>
+    public byte[] BuildAudioConfigBody()
+    {
+        if (_audioConfig is null)
+        {
+            return [];
+        }
+
+        var body = new byte[2 + _audioConfig.Length];
+        body[0] = 0xAF; // AAC / 44kHz / 16bit / stereo
+        body[1] = 0;    // AAC sequence header
+        _audioConfig.CopyTo(body, 2);
+        return body;
+    }
+
+    /// <summary>audio tag：AAC sequence header。</summary>
+    public byte[] BuildAudioConfigTag()
+    {
+        var body = BuildAudioConfigBody();
+        return body.Length == 0 ? [] : BuildTag(FlvTagType.Audio, 0, body);
+    }
+
+    /// <summary>写入一帧 AAC 的 body（2 字节 FLV 音频头 + 原始数据），RTMP 推流复用。</summary>
+    public int WriteAudioBody(MediaFrame frame, IBufferWriter<byte> writer)
+    {
+        if (frame.TrackType != TrackType.Audio || frame.IsConfig || frame.Length == 0 || !HasAudio)
+        {
+            return 0;
+        }
+
+        var bodySize = 2 + frame.Length;
+        var span = writer.GetSpan(bodySize);
+        span[0] = 0xAF;
+        span[1] = 1; // AAC raw
+        frame.Data.Span.CopyTo(span[2..]);
+        writer.Advance(bodySize);
+        return bodySize;
+    }
+
+    /// <summary>写入一帧 AAC 原始数据（AACPacketType=1），返回写入字节数。</summary>
+    public int WriteAudioTag(MediaFrame frame, IBufferWriter<byte> writer)
+    {
+        _body.Clear();
+        var bodySize = WriteAudioBody(frame, _body);
+        if (bodySize == 0)
+        {
+            return 0;
+        }
+
+        var timestamp = TimestampOf(frame.Dts);
+        var span = writer.GetSpan(FlvConstants.TagHeaderSize + bodySize + 4);
+        WriteTagHeader(span, FlvTagType.Audio, bodySize, timestamp);
+        _body.WrittenSpan.CopyTo(span[FlvConstants.TagHeaderSize..]);
+
+        BinaryPrimitives.WriteUInt32BigEndian(
+            span[(FlvConstants.TagHeaderSize + bodySize)..],
+            (uint)(FlvConstants.TagHeaderSize + bodySize));
+
+        writer.Advance(FlvConstants.TagHeaderSize + bodySize + 4);
+        return FlvConstants.TagHeaderSize + bodySize + 4;
+    }
 
     /// <summary>
     /// 写入一帧视频的 tag body（AVCPacketType=1，含 5 字节 FLV 视频头），返回写入字节数。

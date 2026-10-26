@@ -126,6 +126,111 @@ public class YoloApiTests
     }
 
     [Fact]
+    public async Task StartYoloOverlay_WithoutModel_ReportsNotEnabled()
+    {
+        var app = await StartHostAsync(null);
+
+        try
+        {
+            using var client = new HttpClient();
+            using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/startYoloOverlay?app=live&stream=cam"));
+            var root = document.RootElement;
+
+            Assert.Equal(-1, root.GetProperty("code").GetInt32());
+            Assert.Contains("未启用", root.GetProperty("msg").GetString());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("data").ValueKind);
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task StartYoloOverlay_MissingStreamName_IsRejected()
+    {
+        var app = await StartHostAsync("no_such_yolo_model.pt");
+
+        try
+        {
+            using var client = new HttpClient();
+            using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/startYoloOverlay?app=live"));
+            var root = document.RootElement;
+
+            Assert.Equal(-1, root.GetProperty("code").GetInt32());
+            Assert.Contains("app 与 stream", root.GetProperty("msg").GetString());
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task StartYoloOverlay_OverlayStreamName_IsRejected()
+    {
+        var app = await StartHostAsync("no_such_yolo_model.pt");
+
+        try
+        {
+            using var client = new HttpClient();
+            using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/startYoloOverlay?app=live&stream=cam_yolo"));
+            var root = document.RootElement;
+
+            Assert.Equal(-1, root.GetProperty("code").GetInt32());
+            Assert.Contains("不能对叠加流再叠加", root.GetProperty("msg").GetString());
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task GetYoloOverlay_WithoutSessions_ReturnsEmptyList()
+    {
+        var app = await StartHostAsync(null);
+
+        try
+        {
+            using var client = new HttpClient();
+            using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/getYoloOverlay"));
+            var root = document.RootElement;
+
+            Assert.Equal(0, root.GetProperty("code").GetInt32());
+            Assert.Equal(0, root.GetProperty("data").GetArrayLength());
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task StopYoloOverlay_WithoutSession_ReturnsFalse()
+    {
+        var app = await StartHostAsync(null);
+
+        try
+        {
+            using var client = new HttpClient();
+            using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/stopYoloOverlay?app=live&stream=cam"));
+
+            Assert.Equal(0, document.RootElement.GetProperty("code").GetInt32());
+            Assert.False(document.RootElement.GetProperty("data").GetProperty("flag").GetBoolean());
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task YoloInfo_WithModelDirOnly_ListsModels()
     {
         var dir = CreateModelDir();

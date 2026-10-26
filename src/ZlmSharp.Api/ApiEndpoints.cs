@@ -10,13 +10,15 @@ using ZlmSharp.Ai;
 using ZlmSharp.Codecs;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
+using ZlmSharp.Recording;
 using ZlmSharp.Protocols.Rtmp;
 
 namespace ZlmSharp.Api;
 
 /// <summary>
 /// <c>/index/api/*</c> 端点：version / getApiList / getMediaList / close_streams / yoloInfo / yoloDetect /
-/// getYoloResult / startYoloOverlay / stopYoloOverlay / addStreamProxy / delStreamProxy。
+/// getYoloResult / startYoloOverlay / stopYoloOverlay / getYoloOverlay / startRecord / stopRecord / isRecording /
+/// addStreamProxy / delStreamProxy。
 /// 返回体与 ZLM 保持一致（<c>code</c>/<c>msg</c>/<c>data</c> 字段）。
 /// </summary>
 public static class ApiEndpoints
@@ -29,12 +31,20 @@ public static class ApiEndpoints
         "/index/api/getApiList",
         "/index/api/getMediaList",
         "/index/api/close_streams",
+        "/index/api/getSessionList",
+        "/index/api/kick_session",
         "/index/api/yoloInfo",
         "/index/api/yoloDetect",
         "/index/api/getYoloResult",
         "/index/api/startYoloOverlay",
         "/index/api/stopYoloOverlay",
         "/index/api/getYoloOverlay",
+        "/index/api/startRecord",
+        "/index/api/stopRecord",
+        "/index/api/isRecording",
+        "/index/api/startPush",
+        "/index/api/stopPush",
+        "/index/api/getPushList",
         "/index/api/addStreamProxy",
         "/index/api/delStreamProxy",
     ];
@@ -42,21 +52,33 @@ public static class ApiEndpoints
     public static void Map(IEndpointRouteBuilder endpoints, AppOptions options, ApiVersionInfo version)
     {
         var registry = endpoints.ServiceProvider.GetRequiredService<MediaSourceRegistry>();
+        var sessions = endpoints.ServiceProvider.GetService<MediaSessionRegistry>();
         var detector = endpoints.ServiceProvider.GetService<YoloDetectorService>();
         var yoloStore = endpoints.ServiceProvider.GetService<YoloResultStore>();
         var overlays = endpoints.ServiceProvider.GetService<YoloOverlayManager>();
+        var recorder = endpoints.ServiceProvider.GetService<RecorderManager>();
+        var pushes = endpoints.ServiceProvider.GetService<RtmpPushManager>();
         var proxies = endpoints.ServiceProvider.GetService<RtmpPullProxyManager>();
 
         endpoints.MapGet("/index/api/version", (RequestDelegate)(context => VersionAsync(context, options, version)));
         endpoints.MapGet("/index/api/getApiList", (RequestDelegate)(context => ApiListAsync(context, options)));
         endpoints.MapGet("/index/api/getMediaList", (RequestDelegate)(context => MediaListAsync(context, options, registry)));
         endpoints.MapGet("/index/api/close_streams", (RequestDelegate)(context => CloseStreamsAsync(context, options, registry)));
+        endpoints.MapGet("/index/api/getSessionList", (RequestDelegate)(context => SessionListAsync(context, options, sessions)));
+        endpoints.MapGet("/index/api/kick_session", (RequestDelegate)(context => KickSessionAsync(context, options, sessions)));
+        endpoints.MapPost("/index/api/kick_session", (RequestDelegate)(context => KickSessionAsync(context, options, sessions)));
         endpoints.MapGet("/index/api/yoloInfo", (RequestDelegate)(context => YoloInfoAsync(context, options, detector)));
         endpoints.MapPost("/index/api/yoloDetect", (RequestDelegate)(context => YoloDetectAsync(context, options, detector)));
         endpoints.MapGet("/index/api/getYoloResult", (RequestDelegate)(context => YoloResultAsync(context, options, yoloStore)));
         endpoints.MapGet("/index/api/startYoloOverlay", (RequestDelegate)(context => StartYoloOverlayAsync(context, options, detector, overlays)));
         endpoints.MapGet("/index/api/stopYoloOverlay", (RequestDelegate)(context => StopYoloOverlayAsync(context, options, overlays)));
         endpoints.MapGet("/index/api/getYoloOverlay", (RequestDelegate)(context => GetYoloOverlayAsync(context, options, overlays)));
+        endpoints.MapGet("/index/api/startRecord", (RequestDelegate)(context => StartRecordAsync(context, options, recorder)));
+        endpoints.MapGet("/index/api/stopRecord", (RequestDelegate)(context => StopRecordAsync(context, options, recorder)));
+        endpoints.MapGet("/index/api/isRecording", (RequestDelegate)(context => IsRecordingAsync(context, options, recorder)));
+        endpoints.MapGet("/index/api/startPush", (RequestDelegate)(context => StartPushAsync(context, options, pushes)));
+        endpoints.MapGet("/index/api/stopPush", (RequestDelegate)(context => StopPushAsync(context, options, pushes)));
+        endpoints.MapGet("/index/api/getPushList", (RequestDelegate)(context => GetPushListAsync(context, options, pushes)));
         endpoints.MapGet("/index/api/addStreamProxy", (RequestDelegate)(context => AddStreamProxyAsync(context, options, proxies)));
         endpoints.MapGet("/index/api/delStreamProxy", (RequestDelegate)(context => DelStreamProxyAsync(context, options, proxies)));
     }
@@ -337,6 +359,232 @@ public static class ApiEndpoints
         status.Frames,
         status.StartedAt.ToUnixTimeSeconds(),
         (long)Math.Max(0, status.ElapsedMs),
+        status.Error);
+
+    /// <summary>
+    /// 开始录像。<c>type</c>：1=MP4（默认）、2=FLV、3=两者；<c>max_second</c> 切片秒数（默认取 <c>protocol.mp4_max_second</c>）。
+    /// </summary>
+    private static async Task StartRecordAsync(HttpContext context, AppOptions options, RecorderManager? recorder)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "startRecord");
+
+        if (recorder is null)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiRecordResponse(-1, "录像未启用：请注册 AddZlmSharpRecording", null),
+                ApiJsonContext.Default.ApiRecordResponse);
+            return;
+        }
+
+        var query = context.Request.Query;
+        var app = query["app"].ToString();
+        var stream = query["stream"].ToString();
+        if (app.Length == 0 || stream.Length == 0)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiRecordResponse(-1, "请提供 app 与 stream 参数", null),
+                ApiJsonContext.Default.ApiRecordResponse);
+            return;
+        }
+
+        var type = int.TryParse(query["type"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedType)
+            ? parsedType
+            : 1;
+        int? maxSeconds = int.TryParse(query["max_second"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedSeconds)
+            ? parsedSeconds
+            : null;
+
+        try
+        {
+            var status = recorder.Start(
+                StreamKey.Create(query["vhost"].ToString(), app, stream),
+                RecordFormats.FromType(type),
+                maxSeconds);
+
+            await WriteJsonAsync(
+                context,
+                new ApiRecordResponse(0, null, ToApiRecord(status)),
+                ApiJsonContext.Default.ApiRecordResponse);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiRecordResponse(-1, exception.Message, null),
+                ApiJsonContext.Default.ApiRecordResponse);
+        }
+    }
+
+    private static async Task StopRecordAsync(HttpContext context, AppOptions options, RecorderManager? recorder)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "stopRecord");
+
+        var flag = recorder?.Stop(
+            context.Request.Query["vhost"].ToString(),
+            context.Request.Query["app"].ToString(),
+            context.Request.Query["stream"].ToString()) == true;
+
+        await WriteJsonAsync(
+            context,
+            new ApiRecordFlagResponse(0, new ApiRecordFlagData(flag)),
+            ApiJsonContext.Default.ApiRecordFlagResponse);
+    }
+
+    private static async Task IsRecordingAsync(HttpContext context, AppOptions options, RecorderManager? recorder)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "isRecording");
+
+        var status = recorder?.Get(
+            context.Request.Query["vhost"].ToString(),
+            context.Request.Query["app"].ToString(),
+            context.Request.Query["stream"].ToString());
+
+        await WriteJsonAsync(
+            context,
+            new ApiRecordResponse(0, null, status is null ? null : ToApiRecord(status)),
+            ApiJsonContext.Default.ApiRecordResponse);
+    }
+
+    private static ApiRecordData ToApiRecord(RecordingStatus status) => new(
+        status.Vhost,
+        status.App,
+        status.Stream,
+        status.State.ToString().ToLowerInvariant(),
+        status.Formats.HasFlag(RecordFormat.Mp4),
+        status.Formats.HasFlag(RecordFormat.Flv),
+        status.Mp4Path,
+        status.FlvPath,
+        status.Frames,
+        status.DurationMs,
+        status.StartedAt.ToUnixTimeSeconds(),
+        status.Error);
+
+    /// <summary>RTMP 转推：把本地 <c>app/stream</c> 推到 <c>url=rtmp://host/app/stream</c>。</summary>
+    private static async Task StartPushAsync(HttpContext context, AppOptions options, RtmpPushManager? pushes)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "startPush");
+
+        if (pushes is null)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiPushResponse(-1, "转推未启用", null),
+                ApiJsonContext.Default.ApiPushResponse);
+            return;
+        }
+
+        var query = context.Request.Query;
+        var app = query["app"].ToString();
+        var stream = query["stream"].ToString();
+        var target = query["url"].ToString();
+        if (app.Length == 0 || stream.Length == 0 || target.Length == 0)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiPushResponse(-1, "请提供 app、stream 与 url 参数", null),
+                ApiJsonContext.Default.ApiPushResponse);
+            return;
+        }
+
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var url))
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiPushResponse(-1, $"url 不是合法地址：{target}", null),
+                ApiJsonContext.Default.ApiPushResponse);
+            return;
+        }
+
+        try
+        {
+            var status = pushes.Start(query["vhost"].ToString(), app, stream, url);
+            await WriteJsonAsync(
+                context,
+                new ApiPushResponse(0, null, ToApiPush(status)),
+                ApiJsonContext.Default.ApiPushResponse);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiPushResponse(-1, exception.Message, null),
+                ApiJsonContext.Default.ApiPushResponse);
+        }
+    }
+
+    private static async Task StopPushAsync(HttpContext context, AppOptions options, RtmpPushManager? pushes)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "stopPush");
+
+        var flag = pushes?.Stop(
+            context.Request.Query["vhost"].ToString(),
+            context.Request.Query["app"].ToString(),
+            context.Request.Query["stream"].ToString()) == true;
+
+        await WriteJsonAsync(
+            context,
+            new ApiPushFlagResponse(0, new ApiPushFlagData(flag)),
+            ApiJsonContext.Default.ApiPushFlagResponse);
+    }
+
+    private static async Task GetPushListAsync(HttpContext context, AppOptions options, RtmpPushManager? pushes)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getPushList");
+
+        var query = context.Request.Query;
+        ApiPushData[] data = pushes is null
+            ? []
+            : pushes.List(query["vhost"].ToString(), query["app"].ToString(), query["stream"].ToString())
+                .Select(ToApiPush)
+                .ToArray();
+
+        await WriteJsonAsync(
+            context,
+            new ApiPushListResponse(0, data),
+            ApiJsonContext.Default.ApiPushListResponse);
+    }
+
+    private static ApiPushData ToApiPush(PushStatus status) => new(
+        status.Vhost,
+        status.App,
+        status.Stream,
+        status.Url,
+        status.State,
+        status.Frames,
+        status.StartedAt.ToUnixTimeSeconds(),
+        Math.Max(0, status.ElapsedMs),
         status.Error);
 
     private static async Task YoloInfoAsync(HttpContext context, AppOptions options, YoloDetectorService? detector)

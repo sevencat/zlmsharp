@@ -85,6 +85,7 @@ public static class ConfigSchema
         new("protocol", "enable_hls", ConfigValueKind.Bool, "是否转 HLS"),
         new("protocol", "enable_hls_fmp4", ConfigValueKind.Bool, "是否转 HLS-fMP4"),
         new("protocol", "enable_mp4", ConfigValueKind.Bool, "是否录制 MP4"),
+        new("protocol", "enable_flv_record", ConfigValueKind.Bool, "是否同时录制 FLV 原始档"),
         new("protocol", "enable_rtsp", ConfigValueKind.Bool, "是否转 RTSP"),
         new("protocol", "enable_rtmp", ConfigValueKind.Bool, "是否转 RTMP/FLV"),
         new("protocol", "enable_ts", ConfigValueKind.Bool, "是否转 TS"),
@@ -97,6 +98,15 @@ public static class ConfigSchema
         new("protocol", "mp4_max_second", ConfigValueKind.Int, "MP4 切片大小(秒)"),
         new("protocol", "mp4_save_path", ConfigValueKind.String, "MP4 保存路径"),
         new("protocol", "hls_save_path", ConfigValueKind.String, "HLS 保存路径"),
+
+        new("hook", "enable", ConfigValueKind.Bool, "是否启用媒体事件 hook"),
+        new("hook", "on_publish", ConfigValueKind.String, "推流鉴权 hook 地址"),
+        new("hook", "on_play", ConfigValueKind.String, "播放鉴权 hook 地址"),
+        new("hook", "on_stream_none_reader", ConfigValueKind.String, "无人观看 hook 地址"),
+        new("hook", "timeoutSec", ConfigValueKind.Int, "hook 超时(秒)"),
+        new("hook", "retry", ConfigValueKind.Int, "hook 失败重试次数"),
+        new("hook", "retry_delay", ConfigValueKind.Int, "hook 重试间隔(毫秒)"),
+        new("hook", "fail_open", ConfigValueKind.Bool, "hook 不可用时是否放行(默认拒绝)"),
 
         new("log", "level", ConfigValueKind.Int, "日志级别(0trace~6off)"),
         new("log", "console", ConfigValueKind.Bool, "是否输出到控制台"),
