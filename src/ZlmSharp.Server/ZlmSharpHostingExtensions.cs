@@ -33,6 +33,22 @@ public static class ZlmSharpHostingExtensions
         services.AddSingleton(runtime.DotEnv);
         services.AddSingleton<ZlmSharp.Core.MediaSourceRegistry>();
         services.AddZlmSharpYolo(runtime.Options.Env);
+        services.AddSingleton(provider =>
+        {
+            var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger("ZlmSharp.Proxy");
+            return new ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager(
+                provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
+                (level, message) => logger.Log(
+                    level switch
+                    {
+                        ZlmSharp.Protocols.Rtmp.RtmpLogLevel.Debug => MsLogLevel.Debug,
+                        ZlmSharp.Protocols.Rtmp.RtmpLogLevel.Info => MsLogLevel.Information,
+                        ZlmSharp.Protocols.Rtmp.RtmpLogLevel.Warning => MsLogLevel.Warning,
+                        _ => MsLogLevel.Error,
+                    },
+                    "{Message}",
+                    message));
+        });
 
         if (runtime.NLogConfiguration is { } nlogConfiguration)
         {

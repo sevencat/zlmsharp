@@ -41,7 +41,8 @@ public sealed record ApiYoloObject(
     float X,
     float Y,
     float Width,
-    float Height);
+    float Height,
+    long TrackId);
 
 public sealed record ApiYoloDetectData(
     int Width,
@@ -68,3 +69,53 @@ public sealed record ApiYoloInfoData(
     IReadOnlyList<string> LoadedModels);
 
 public sealed record ApiYoloInfoResponse(int Code, string? Msg, ApiYoloInfoData? Data);
+
+/// <summary>某路流最近一次 YOLO 检测结果。</summary>
+public sealed record ApiYoloSnapshot(
+    string Vhost,
+    string App,
+    string Stream,
+    long At,
+    long AgeMs,
+    long ElapsedMs,
+    int Width,
+    int Height,
+    int Count,
+    IReadOnlyList<ApiYoloObject> Objects,
+    string? Error);
+
+public sealed record ApiYoloResultResponse(int Code, IReadOnlyList<ApiYoloSnapshot> Data);
+
+/// <summary>一路叠加流（<c>{stream}_yolo</c>）的状态。</summary>
+public sealed record ApiYoloOverlayData(
+    string Vhost,
+    string App,
+    string Stream,
+    string OverlayStream,
+    string Input,
+    string Output,
+    string State,
+    int Width,
+    int Height,
+    int Fps,
+    int BitrateKbps,
+    long Frames,
+    long StartedAt,
+    long ElapsedMs,
+    string? Error);
+
+public sealed record ApiYoloOverlayResponse(int Code, string? Msg, ApiYoloOverlayData? Data);
+
+public sealed record ApiYoloOverlayListResponse(int Code, IReadOnlyList<ApiYoloOverlayData> Data);
+
+public sealed record ApiYoloOverlayFlagData(bool Flag);
+
+public sealed record ApiYoloOverlayFlagResponse(int Code, ApiYoloOverlayFlagData Data);
+
+public sealed record ApiProxyKeyData(string Key);
+
+public sealed record ApiProxyKeyResponse(int Code, ApiProxyKeyData Data);
+
+public sealed record ApiProxyFlagData(bool Flag);
+
+public sealed record ApiProxyFlagResponse(int Code, ApiProxyFlagData Data);

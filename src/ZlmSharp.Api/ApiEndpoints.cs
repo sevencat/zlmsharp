@@ -10,11 +10,13 @@ using ZlmSharp.Ai;
 using ZlmSharp.Codecs;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
+using ZlmSharp.Protocols.Rtmp;
 
 namespace ZlmSharp.Api;
 
 /// <summary>
-/// <c>/index/api/*</c> 端点：version / getApiList / getMediaList / close_streams / yoloInfo / yoloDetect。
+/// <c>/index/api/*</c> 端点：version / getApiList / getMediaList / close_streams / yoloInfo / yoloDetect /
+/// getYoloResult / startYoloOverlay / stopYoloOverlay / addStreamProxy / delStreamProxy。
 /// 返回体与 ZLM 保持一致（<c>code</c>/<c>msg</c>/<c>data</c> 字段）。
 /// </summary>
 public static class ApiEndpoints
@@ -29,12 +31,21 @@ public static class ApiEndpoints
         "/index/api/close_streams",
         "/index/api/yoloInfo",
         "/index/api/yoloDetect",
+        "/index/api/getYoloResult",
+        "/index/api/startYoloOverlay",
+        "/index/api/stopYoloOverlay",
+        "/index/api/getYoloOverlay",
+        "/index/api/addStreamProxy",
+        "/index/api/delStreamProxy",
     ];
 
     public static void Map(IEndpointRouteBuilder endpoints, AppOptions options, ApiVersionInfo version)
     {
         var registry = endpoints.ServiceProvider.GetRequiredService<MediaSourceRegistry>();
         var detector = endpoints.ServiceProvider.GetService<YoloDetectorService>();
+        var yoloStore = endpoints.ServiceProvider.GetService<YoloResultStore>();
+        var overlays = endpoints.ServiceProvider.GetService<YoloOverlayManager>();
+        var proxies = endpoints.ServiceProvider.GetService<RtmpPullProxyManager>();
 
         endpoints.MapGet("/index/api/version", (RequestDelegate)(context => VersionAsync(context, options, version)));
         endpoints.MapGet("/index/api/getApiList", (RequestDelegate)(context => ApiListAsync(context, options)));
@@ -42,7 +53,291 @@ public static class ApiEndpoints
         endpoints.MapGet("/index/api/close_streams", (RequestDelegate)(context => CloseStreamsAsync(context, options, registry)));
         endpoints.MapGet("/index/api/yoloInfo", (RequestDelegate)(context => YoloInfoAsync(context, options, detector)));
         endpoints.MapPost("/index/api/yoloDetect", (RequestDelegate)(context => YoloDetectAsync(context, options, detector)));
+        endpoints.MapGet("/index/api/getYoloResult", (RequestDelegate)(context => YoloResultAsync(context, options, yoloStore)));
+        endpoints.MapGet("/index/api/startYoloOverlay", (RequestDelegate)(context => StartYoloOverlayAsync(context, options, detector, overlays)));
+        endpoints.MapGet("/index/api/stopYoloOverlay", (RequestDelegate)(context => StopYoloOverlayAsync(context, options, overlays)));
+        endpoints.MapGet("/index/api/getYoloOverlay", (RequestDelegate)(context => GetYoloOverlayAsync(context, options, overlays)));
+        endpoints.MapGet("/index/api/addStreamProxy", (RequestDelegate)(context => AddStreamProxyAsync(context, options, proxies)));
+        endpoints.MapGet("/index/api/delStreamProxy", (RequestDelegate)(context => DelStreamProxyAsync(context, options, proxies)));
     }
+
+    /// <summary>拉流代理：把远端 rtmp 拉到本地 <c>vhost/app/stream</c>（也可用返回的 key 停止）。</summary>
+    private static async Task AddStreamProxyAsync(HttpContext context, AppOptions options, RtmpPullProxyManager? proxies)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "addStreamProxy");
+
+        if (proxies is null)
+        {
+            await WriteJsonAsync(context, new ApiErrorResponse(-1, "拉流代理未启用"), ApiJsonContext.Default.ApiErrorResponse);
+            return;
+        }
+
+        try
+        {
+            var key = proxies.Start(
+                context.Request.Query["vhost"].ToString(),
+                context.Request.Query["app"].ToString(),
+                context.Request.Query["stream"].ToString(),
+                context.Request.Query["url"].ToString());
+
+            await WriteJsonAsync(
+                context,
+                new ApiProxyKeyResponse(0, new ApiProxyKeyData(key.ToString())),
+                ApiJsonContext.Default.ApiProxyKeyResponse);
+        }
+        catch (ArgumentException exception)
+        {
+            await WriteJsonAsync(context, new ApiErrorResponse(-1, exception.Message), ApiJsonContext.Default.ApiErrorResponse);
+        }
+    }
+
+    private static async Task DelStreamProxyAsync(HttpContext context, AppOptions options, RtmpPullProxyManager? proxies)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "delStreamProxy");
+
+        if (proxies is null)
+        {
+            await WriteJsonAsync(context, new ApiErrorResponse(-1, "拉流代理未启用"), ApiJsonContext.Default.ApiErrorResponse);
+            return;
+        }
+
+        var keyText = context.Request.Query["key"].ToString();
+        StreamKey key;
+
+        if (keyText.Length > 0)
+        {
+            var parts = keyText.Split('/');
+            if (parts.Length != 3 || parts[0].Length == 0 || parts[1].Length == 0 || parts[2].Length == 0)
+            {
+                await WriteJsonAsync(
+                    context,
+                    new ApiErrorResponse(-1, $"key 格式应为 vhost/app/stream：{keyText}"),
+                    ApiJsonContext.Default.ApiErrorResponse);
+                return;
+            }
+
+            key = StreamKey.Create(parts[0], parts[1], parts[2]);
+        }
+        else
+        {
+            var app = context.Request.Query["app"].ToString();
+            var stream = context.Request.Query["stream"].ToString();
+            if (app.Length == 0 || stream.Length == 0)
+            {
+                await WriteJsonAsync(
+                    context,
+                    new ApiErrorResponse(-1, "缺少 key 或 app/stream 参数"),
+                    ApiJsonContext.Default.ApiErrorResponse);
+                return;
+            }
+
+            key = StreamKey.Create(context.Request.Query["vhost"].ToString(), app, stream);
+        }
+
+        var flag = proxies.Stop(key);
+        await WriteJsonAsync(context, new ApiProxyFlagResponse(0, new ApiProxyFlagData(flag)), ApiJsonContext.Default.ApiProxyFlagResponse);
+    }
+
+    /// <summary>查询定时检测结果（每路流只保留最近一次）。</summary>
+    private static async Task YoloResultAsync(HttpContext context, AppOptions options, YoloResultStore? store)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getYoloResult");
+
+        if (store is null)
+        {
+            await WriteJsonAsync(context, new ApiYoloResultResponse(0, []), ApiJsonContext.Default.ApiYoloResultResponse);
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var snapshots = store.List(
+            context.Request.Query["vhost"].ToString(),
+            context.Request.Query["app"].ToString(),
+            context.Request.Query["stream"].ToString());
+
+        var data = new List<ApiYoloSnapshot>(snapshots.Count);
+        foreach (var snapshot in snapshots)
+        {
+            var objects = new List<ApiYoloObject>(snapshot.Objects.Count);
+            foreach (var item in snapshot.Objects)
+            {
+                objects.Add(new ApiYoloObject(
+                    item.ClassId,
+                    item.ClassName,
+                    item.Confidence,
+                    item.X,
+                    item.Y,
+                    item.Width,
+                    item.Height,
+                    item.TrackId));
+            }
+
+            data.Add(new ApiYoloSnapshot(
+                snapshot.Vhost,
+                snapshot.App,
+                snapshot.Stream,
+                snapshot.At.ToUnixTimeSeconds(),
+                (long)Math.Max(0, (now - snapshot.At).TotalMilliseconds),
+                snapshot.ElapsedMs,
+                snapshot.Width,
+                snapshot.Height,
+                objects.Count,
+                objects,
+                snapshot.Error));
+        }
+
+        await WriteJsonAsync(context, new ApiYoloResultResponse(0, data), ApiJsonContext.Default.ApiYoloResultResponse);
+    }
+
+    /// <summary>
+    /// 开始结果叠加：ffmpeg 解码源流 → 画框 → 编码推回本机 RTMP，输出 <c>{stream}_yolo</c>。
+    /// 可选 <c>fps</c>（默认源帧率或 25）、<c>bitrate</c>（kbps，默认 1500）、<c>scale</c>（标签缩放，默认 2）。
+    /// </summary>
+    private static async Task StartYoloOverlayAsync(
+        HttpContext context,
+        AppOptions options,
+        YoloDetectorService? detector,
+        YoloOverlayManager? overlays)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "startYoloOverlay");
+
+        if (overlays is null || detector is null || !detector.Enabled)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiYoloOverlayResponse(-1, "yolo 未启用：请在 .env 配置 ZLM_YOLO_MODEL", null),
+                ApiJsonContext.Default.ApiYoloOverlayResponse);
+            return;
+        }
+
+        var app = context.Request.Query["app"].ToString();
+        var stream = context.Request.Query["stream"].ToString();
+        if (app.Length == 0 || stream.Length == 0)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiYoloOverlayResponse(-1, "请提供 app 与 stream 参数", null),
+                ApiJsonContext.Default.ApiYoloOverlayResponse);
+            return;
+        }
+
+        var query = context.Request.Query;
+        int? fps = int.TryParse(query["fps"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedFps) && parsedFps > 0
+            ? parsedFps
+            : null;
+        var bitrate = int.TryParse(query["bitrate"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBitrate)
+            ? parsedBitrate
+            : 0;
+        var scale = int.TryParse(query["scale"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedScale)
+            ? parsedScale
+            : 2;
+
+        try
+        {
+            var status = overlays.Start(query["vhost"].ToString(), app, stream, fps, bitrate, scale);
+            await WriteJsonAsync(
+                context,
+                new ApiYoloOverlayResponse(0, null, ToApiOverlay(status)),
+                ApiJsonContext.Default.ApiYoloOverlayResponse);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiYoloOverlayResponse(-1, exception.Message, null),
+                ApiJsonContext.Default.ApiYoloOverlayResponse);
+        }
+    }
+
+    private static async Task StopYoloOverlayAsync(HttpContext context, AppOptions options, YoloOverlayManager? overlays)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "stopYoloOverlay");
+
+        if (overlays is null)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiYoloOverlayFlagResponse(0, new ApiYoloOverlayFlagData(false)),
+                ApiJsonContext.Default.ApiYoloOverlayFlagResponse);
+            return;
+        }
+
+        var flag = overlays.Stop(
+            context.Request.Query["vhost"].ToString(),
+            context.Request.Query["app"].ToString(),
+            context.Request.Query["stream"].ToString());
+
+        await WriteJsonAsync(
+            context,
+            new ApiYoloOverlayFlagResponse(0, new ApiYoloOverlayFlagData(flag)),
+            ApiJsonContext.Default.ApiYoloOverlayFlagResponse);
+    }
+
+    private static async Task GetYoloOverlayAsync(HttpContext context, AppOptions options, YoloOverlayManager? overlays)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getYoloOverlay");
+
+        ApiYoloOverlayData[] data = overlays is null
+            ? []
+            : overlays.List(
+                    context.Request.Query["vhost"].ToString(),
+                    context.Request.Query["app"].ToString(),
+                    context.Request.Query["stream"].ToString())
+                .Select(ToApiOverlay)
+                .ToArray();
+
+        await WriteJsonAsync(
+            context,
+            new ApiYoloOverlayListResponse(0, data),
+            ApiJsonContext.Default.ApiYoloOverlayListResponse);
+    }
+
+    private static ApiYoloOverlayData ToApiOverlay(YoloOverlayStatus status) => new(
+        status.Vhost,
+        status.App,
+        status.Stream,
+        status.OverlayStream,
+        status.InputUrl,
+        status.OutputUrl,
+        status.State.ToString().ToLowerInvariant(),
+        status.Width,
+        status.Height,
+        status.Fps,
+        status.BitrateKbps,
+        status.Frames,
+        status.StartedAt.ToUnixTimeSeconds(),
+        (long)Math.Max(0, status.ElapsedMs),
+        status.Error);
 
     private static async Task YoloInfoAsync(HttpContext context, AppOptions options, YoloDetectorService? detector)
     {
@@ -212,7 +507,8 @@ public static class ApiEndpoints
                     item.X,
                     item.Y,
                     item.Width,
-                    item.Height));
+                    item.Height,
+                    item.TrackId));
             }
 
             var data = new ApiYoloDetectData(result.Width, result.Height, result.ElapsedMs, objects.Count, objects);

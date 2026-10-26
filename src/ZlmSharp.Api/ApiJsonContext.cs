@@ -11,6 +11,12 @@ namespace ZlmSharp.Api;
 [JsonSerializable(typeof(ApiCloseStreamsResponse))]
 [JsonSerializable(typeof(ApiYoloDetectResponse))]
 [JsonSerializable(typeof(ApiYoloInfoResponse))]
+[JsonSerializable(typeof(ApiYoloResultResponse))]
+[JsonSerializable(typeof(ApiYoloOverlayResponse))]
+[JsonSerializable(typeof(ApiYoloOverlayListResponse))]
+[JsonSerializable(typeof(ApiYoloOverlayFlagResponse))]
+[JsonSerializable(typeof(ApiProxyKeyResponse))]
+[JsonSerializable(typeof(ApiProxyFlagResponse))]
 internal sealed partial class ApiJsonContext : JsonSerializerContext
 {
 }

@@ -8,7 +8,13 @@ public sealed record YoloObject(
     float X,
     float Y,
     float Width,
-    float Height);
+    float Height)
+{
+    /// <summary>
+    /// 跟踪 ID（由 <see cref="ObjectTracker"/> 在定时检测时写入，跨帧稳定；单图检测为 0）。
+    /// </summary>
+    public long TrackId { get; init; }
+}
 
 /// <summary>一次检测的结果。</summary>
 public sealed record YoloResult(

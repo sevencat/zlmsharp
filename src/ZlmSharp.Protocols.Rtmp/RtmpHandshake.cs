@@ -22,8 +22,12 @@ public static class RtmpHandshake
         var c1 = new byte[BlockSize];
         await ReadExactlyAsync(stream, c1, cancellationToken).ConfigureAwait(false);
 
+        // S1 = time(4) + zero(4) + random(1528)。版本字段必须为 0：
+        // ffmpeg 看到 S1[5] >= 3 会当作复杂握手去校验 digest，简单握手必然失败
+        // （现象就是 ffprobe 报 "Server response validating failed"）。
         var s1 = new byte[BlockSize];
-        Random.Shared.NextBytes(s1); // time/zero 字段保持随机，客户端不校验
+        Random.Shared.NextBytes(s1);
+        s1.AsSpan(0, 8).Clear();
 
         var output = new byte[1 + BlockSize + BlockSize];
         output[0] = RtmpConstants.Version;
@@ -43,6 +47,7 @@ public static class RtmpHandshake
         var c0c1 = new byte[1 + BlockSize];
         c0c1[0] = RtmpConstants.Version;
         Random.Shared.NextBytes(c0c1.AsSpan(1));
+        c0c1.AsSpan(5, 4).Clear(); // C1 版本号写 0：声明使用简单握手
 
         await stream.WriteAsync(c0c1, cancellationToken).ConfigureAwait(false);
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
