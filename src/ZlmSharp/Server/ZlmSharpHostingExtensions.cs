@@ -81,7 +81,11 @@ public static class ZlmSharpHostingExtensions
                         _ => MsLogLevel.Error,
                     },
                     "{Message}",
-                    message));
+                    message),
+                new ZlmSharp.Protocols.Rtmp.RtmpPushOptions
+                {
+                    Enhanced = runtime.Options.Rtmp.Enhanced,
+                });
         });
 
         if (runtime.NLogConfiguration is { } nlogConfiguration)

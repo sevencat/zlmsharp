@@ -50,6 +50,7 @@ internal sealed class RtmpListenerService : TcpListenerHostedService
                 HandshakeTimeout = TimeSpan.FromSeconds(Math.Max(1, _options.HandshakeSecond)),
                 MaxStreamWaitMS = _general.MaxStreamWaitMS,
                 WaitTrackReadyMS = _general.WaitTrackReadyMS,
+                Enhanced = _options.Enhanced,
             },
             Log,
             _hook,

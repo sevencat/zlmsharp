@@ -32,6 +32,7 @@ public sealed class FlvMuxer
     private readonly byte[]? _audioConfig;
     private readonly int _audioSampleRate;
     private readonly int _audioChannels;
+    private readonly bool _enhancedRtmp;
     private readonly ArrayBufferWriter<byte> _scratch = new(64 * 1024);
     private readonly ArrayBufferWriter<byte> _body = new(256 * 1024);
 
@@ -43,28 +44,38 @@ public sealed class FlvMuxer
         FlvMetadata? metadata = null,
         ReadOnlyMemory<byte> audioConfig = default,
         int audioSampleRate = 0,
-        int audioChannels = 0)
-        : this(VideoCodecConfig.FromH264(config), metadata, audioConfig, audioSampleRate, audioChannels)
+        int audioChannels = 0,
+        bool enhancedRtmp = false)
+        : this(VideoCodecConfig.FromH264(config), metadata, audioConfig, audioSampleRate, audioChannels, enhancedRtmp)
     {
     }
 
     /// <summary>H.264 / H.265 通用构造：按参数集自动选择 AVCDecoderConfigurationRecord 或 hvcC。</summary>
+    /// <param name="enhancedRtmp">
+    /// HEVC 是否使用 Enhanced RTMP 视频头（0x80 | FrameType | PacketType + 'hvc1'）。
+    /// 关闭时退回 legacy codec id 12；H.264 始终走 legacy（兼容性最好）。
+    /// </param>
     public FlvMuxer(
         VideoCodecConfig config,
         FlvMetadata? metadata = null,
         ReadOnlyMemory<byte> audioConfig = default,
         int audioSampleRate = 0,
-        int audioChannels = 0)
+        int audioChannels = 0,
+        bool enhancedRtmp = false)
     {
         _config = config;
         _metadata = metadata ?? new FlvMetadata();
         _audioConfig = audioConfig.Length > 0 ? audioConfig.ToArray() : null;
         _audioSampleRate = audioSampleRate;
         _audioChannels = audioChannels;
+        _enhancedRtmp = enhancedRtmp;
     }
 
-    /// <summary>FLV 视频编码 id：H.264 → 7，H.265 → 12。</summary>
+    /// <summary>FLV 视频编码 id：H.264 → 7，H.265 → 12（onMetaData 与 legacy 头都用它）。</summary>
     public byte VideoCodecId => _config.IsHevc ? FlvConstants.VideoCodecHevc : FlvConstants.VideoCodecAvc;
+
+    /// <summary>HEVC 且开启增强头时，视频 tag 使用 Enhanced RTMP 布局。</summary>
+    public bool EnhancedRtmp => _enhancedRtmp && _config.IsHevc;
 
     public long? BaseDts => _baseDts;
 
@@ -103,7 +114,9 @@ public sealed class FlvMuxer
         WriteAmfPropertyName(writer, "height");
         WriteAmfNumber(writer, _metadata.Height);
         WriteAmfPropertyName(writer, "videocodecid");
-        WriteAmfNumber(writer, VideoCodecId);
+        // 增强模式与 FFmpeg/OBS 对齐：videocodecid 写 FourCC 数值（'hvc1' = 1752589105）；
+        // legacy 模式仍写 12，方便只认 codecId=12 的老工具。
+        WriteAmfNumber(writer, EnhancedRtmp ? FlvFourCc.Hvc1 : VideoCodecId);
         WriteAmfPropertyName(writer, "framerate");
         WriteAmfNumber(writer, _metadata.FrameRate <= 0 ? 25 : _metadata.FrameRate);
 
@@ -133,10 +146,21 @@ public sealed class FlvMuxer
     /// <summary>
     /// video tag 的 body：AVCDecoderConfigurationRecord（H.264）或 hvcC（H.265），
     /// byte1 = 0 表示 sequence header，RTMP 播放直接复用。
+    /// 增强模式下写成 Enhanced RTMP 的 SequenceStart（0x90 | 'hvc1' | hvcC）。
     /// </summary>
     public byte[] BuildAvcConfigBody()
     {
         var record = _config.BuildConfigRecord();
+
+        if (EnhancedRtmp)
+        {
+            var enhanced = new byte[5 + record.Length];
+            enhanced[0] = (byte)(FlvConstants.VideoExHeaderFlag | (1 << 4) | (byte)FlvVideoPacketType.SequenceStart);
+            BinaryPrimitives.WriteUInt32BigEndian(enhanced.AsSpan(1), FlvFourCc.Hvc1);
+            record.CopyTo(enhanced, 5);
+            return enhanced;
+        }
+
         var body = new byte[5 + record.Length];
         body[0] = (byte)(0x10 | VideoCodecId); // keyframe + 编码 id（7=AVC / 12=HEVC）
         body[1] = 0;    // sequence header
@@ -213,6 +237,8 @@ public sealed class FlvMuxer
     /// <summary>
     /// 写入一帧视频的 tag body（AVCPacketType=1，含 5 字节 FLV 视频头），返回写入字节数。
     /// RTMP 播放用它拼 video 消息 payload。配置帧返回 0。
+    /// 增强模式下 HEVC 写成 [0x80|FrameType|PacketType]['hvc1'][CTS:3?] + AVCC 负载，
+    /// CTS 为 0 时用 CodedFramesX 省掉 3 字节（与 FFmpeg 一致）。
     /// </summary>
     public int WriteVideoBody(MediaFrame frame, IBufferWriter<byte> writer)
     {
@@ -228,13 +254,39 @@ public sealed class FlvMuxer
             return 0;
         }
 
+        var frameType = frame.IsKeyFrame ? 1 : 2;
+        var compositionTime = (int)Math.Clamp(frame.Pts - frame.Dts, -0x800000, 0x7FFFFF);
+
+        if (EnhancedRtmp)
+        {
+            var packetType = compositionTime == 0
+                ? FlvVideoPacketType.CodedFramesX
+                : FlvVideoPacketType.CodedFrames;
+            var headerSize = packetType == FlvVideoPacketType.CodedFrames ? 8 : 5;
+            var enhancedSize = headerSize + payloadLength;
+            var enhancedSpan = writer.GetSpan(enhancedSize);
+
+            enhancedSpan[0] = (byte)(FlvConstants.VideoExHeaderFlag | (frameType << 4) | (byte)packetType);
+            BinaryPrimitives.WriteUInt32BigEndian(enhancedSpan[1..], FlvFourCc.Hvc1);
+
+            if (packetType == FlvVideoPacketType.CodedFrames)
+            {
+                enhancedSpan[5] = (byte)(compositionTime >> 16);
+                enhancedSpan[6] = (byte)(compositionTime >> 8);
+                enhancedSpan[7] = (byte)compositionTime;
+            }
+
+            _scratch.WrittenSpan.CopyTo(enhancedSpan[headerSize..]);
+            writer.Advance(enhancedSize);
+
+            return enhancedSize;
+        }
+
         var bodySize = 5 + payloadLength;
         var span = writer.GetSpan(bodySize);
 
-        span[0] = (byte)(((frame.IsKeyFrame ? 1 : 2) << 4) | VideoCodecId);
+        span[0] = (byte)((frameType << 4) | VideoCodecId);
         span[1] = 1; // AVC / HEVC NALU
-
-        var compositionTime = (int)Math.Clamp(frame.Pts - frame.Dts, -0x800000, 0x7FFFFF);
         span[2] = (byte)(compositionTime >> 16);
         span[3] = (byte)(compositionTime >> 8);
         span[4] = (byte)compositionTime;

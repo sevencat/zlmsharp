@@ -128,7 +128,7 @@ public static class HttpFlvEndpoint
 
             if (context.WebSockets.IsWebSocketRequest)
             {
-                await HandleWebSocketAsync(context, source, config, metadata, url, logger).ConfigureAwait(false);
+                await HandleWebSocketAsync(context, options, source, config, metadata, url, logger).ConfigureAwait(false);
                 return;
             }
 
@@ -156,7 +156,13 @@ public static class HttpFlvEndpoint
         try
         {
             var (frames, bytes) = await FlvLiveStream
-                .RunAsync(source, config, metadata, (data, ct) => WriteBodyAsync(body, data, ct), cancellationToken)
+                .RunAsync(
+                    source,
+                    config,
+                    metadata,
+                    (data, ct) => WriteBodyAsync(body, data, ct),
+                    cancellationToken,
+                    options.Rtmp.Enhanced)
                 .ConfigureAwait(false);
 
             logger.LogInformation("HTTP-FLV 结束播放 {Url}：{Frames} 帧 / {Bytes} 字节", url, frames, bytes);
@@ -173,6 +179,7 @@ public static class HttpFlvEndpoint
 
     private static async Task HandleWebSocketAsync(
         HttpContext context,
+        AppOptions options,
         MediaSource source,
         VideoCodecConfig config,
         FlvMetadata metadata,
@@ -190,7 +197,8 @@ public static class HttpFlvEndpoint
                     config,
                     metadata,
                     (data, ct) => WriteWebSocketAsync(socket, data, ct),
-                    context.RequestAborted)
+                    context.RequestAborted,
+                    options.Rtmp.Enhanced)
                 .ConfigureAwait(false);
 
             logger.LogInformation("WS-FLV 结束播放 {Url}：{Frames} 帧 / {Bytes} 字节", url, frames, bytes);

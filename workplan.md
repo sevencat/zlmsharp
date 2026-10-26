@@ -184,9 +184,9 @@
 
 ## 测试基线
 
-`dotnet test tests/ZlmSharp.Tests`：**259 个用例全绿**，`dotnet build zlmsharp.sln` Debug/Release 均 0 警告。
+`dotnet test tests/ZlmSharp.Tests`：**268 个用例全绿**，`dotnet build zlmsharp.sln` Debug/Release 均 0 警告。
 
-三期新增覆盖：HEVC SPS/hvcC 往返（真实参数集）、RFC 7798 单包/FU 往返、H.265 SDP 生成与解析、FLV/MP4/TS 的 HEVC 封装、RTSP H.265 推流→播放端到端、通用分析层（结果存储/图元映射/三种 renderer/分析器注册表/伪分析器链路）、管理页面（内嵌资源、路由不遮蔽 API 与 FLV）。
+三期新增覆盖：HEVC SPS/hvcC 往返（真实参数集）、RFC 7798 单包/FU 往返、H.265 SDP 生成与解析、FLV/MP4/TS 的 HEVC 封装、RTSP H.265 推流→播放端到端、通用分析层（结果存储/图元映射/三种 renderer/分析器注册表/伪分析器链路）、管理页面（内嵌资源、路由不遮蔽 API 与 FLV）、Enhanced RTMP（增强头字节布局、CodedFramesX/CTS、配置与帧往返 ingest、RTMP 播放端到端、HTTP-FLV 输出、Metadata/SequenceEnd 忽略）。
 
 覆盖：配置绑定、StreamUrl 解析、媒体源/GOP/注册表、H.264 解析与 AVCC 互转、FLV 封装、HTTP-FLV（端到端）、AMF0、RTMP chunk、RTMP 握手（S1 版本字段）、RTMP 推流会话、RTMP 播放会话、RTMP 推流 → HTTP-FLV 端到端、拉流代理端到端（推流 → 代理 → 本地播放）、**RTSP 源拉流代理端到端、`[proxy]` 启动即拉（含源流后到重连）、代理 list 解析/并发上限/`originType`+`schema`**、RTSP 消息解析、SDP、RTP 打包、RTCP SR、**推流侧 RTCP RR 与 SR 解析、AAC 推流解包**、RTSP 播放会话（TCP / UDP）、RTSP 监听服务端到端（TCP / UDP）、RTSP PAUSE 续播与 Range 定位（seq/rtptime）、RTSP 推流（SDP 解析 / RTP 解包 / 目标 URI）、WS-FLV 端到端、getMediaList/close_streams、PPM 解析/显式 YOLO 配置、yoloInfo/yoloDetect（未启用/模型不可读/入参校验）、RGB24 绘框与标签（裁剪/stride/位图字体）、叠加流参数校验与叠加入口、IoU 跟踪（ID 稳定/丢失容忍/过期回收）、FLV 音频 tag、MP4/FLV 录制（stsz 采样数、avcC/esds、音频、切片）、**HLS/TS 录制（包对齐/PSI/PES/ADTS/切片滚动/非关键帧不建片）、录像文件 API（列出/删除/越界拒绝）、断流自动续录**、录像/转推 API 入参、hook（请求体字段/code 拒绝/HTTP 错误/超时/fail_open/RTMP 推流放行与拒绝）、会话注册表与 getSessionList/kick_session（含踢掉推流端）、无人观看回收（auto_close 开/关、残留流兜底、跨周期不误杀）、丢帧统计与 `dropFrames`、常驻解码器（启动失败路径、真实 ffmpeg 解码与池释放、连续取帧）。
 
@@ -201,13 +201,23 @@
 
 ## 下一阶段计划（三期，M15–M19）
 
-**进展**：P1（H.265）、P2（管理页面）、P3（AI 通用层）已落地，259 个用例全绿；**下一步只剩 P4（国标 / JT809）**，建议拆成「国标」「JT809」两个子迭代。下面各节保留原始设计说明，并在标题下补了「落地结果 / 仍未做」。
+**进展**：P1（H.265 + Enhanced RTMP）、P2（管理页面）、P3（AI 通用层）已落地，268 个用例全绿；**下一步只剩 P4（国标 / JT809）**，建议拆成「国标」「JT809」两个子迭代。下面各节保留原始设计说明，并在标题下补了「落地结果 / 仍未做」。
 
 ### P1（M15）H.265 / HEVC 全链路支持 ✅ 已完成
 
 **落地结果**：`Codecs/H265{NalUnit,SpsParser,Config}` + `VideoCodecConfig`（H.264/H.265 统一视图）+ `VideoCodecConfigResolver` 把原先散在各 muxer 的 codec 分支收成一处；RTSP 按 RFC 7798 打包/解包（`H265RtpDepacketizer`、`IVideoRtpDepacketizer`），SDP 带 `sprop-vps/sps/pps`；FLV/RTMP 用 codecId 12 + `hvcC`（采集与播放双向），MP4 写 `hvc1` + `hvcC`，TS/PMT 用 stream_type `0x24`，HLS/录像/转推随之生效。RTSP 推流→播放、FLV/MP4/TS 采集均有用例，SPS 解析与 hvcC 往返用真实 ffmpeg/libx265 参数集对拍（320x240 / level 60）。
 
-**仍未做**：RTMP 播放侧只写 legacy codecId 12 + `hvcC`（未实现 enhanced RTMP 的四字节扩展头）；MP4 固定 `hvc1`（未提供 `hev1` 开关）；H.265 叠加流未在真实 265 源上做端到端验证（解码走 ffmpeg 子进程，理论上与 H.264 一致）。
+**Enhanced RTMP（E-RTMP v1/v2 字节布局）**：`FlvVideoTagHeader` 统一解析两种头——legacy `[FrameType|CodecId][AVCPacketType][CTS]` 与增强 `[0x80|FrameType|PacketType]['hvc1'][CTS?]`；`FlvPacketType` 覆盖 SequenceStart/CodedFrames/CodedFramesX/SequenceEnd/Metadata。封装侧 `FlvMuxer(enhancedRtmp:)` 把 HEVC 序列头写成 `0x90 + 'hvc1' + hvcC`，帧在 `pts == dts` 时用 `CodedFramesX`（省 3 字节 CTS）、否则 `CodedFrames` + 3 字节 CTS；onMetaData 的 `videocodecid` 增强模式写 `'hvc1'` 数值（1752589105，与 FFmpeg/OBS 实测一致），legacy 模式写 12。解封装侧两种头都收（H.264 legacy 不受影响，`Metadata`/`SequenceEnd`/`Multitrack` 忽略）。开关是 ini `[rtmp] enhanced`（默认 1，绑定到 `RtmpOptions.Enhanced`），同时作用于 RTMP 播放、转推、HTTP-FLV/WS-FLV；RTMP 播放的参数集解析换成 `VideoCodecConfigResolver`，因此 HEVC 也能走 RTMP 播。实测本机 ffmpeg 8.1 双向：`-c:v libx265 -f flv` 推流可被本服务解析（320x240）；ffprobe 从本服务 RTMP 拉流，`enhanced=1` 与 `enhanced=0`（legacy codecId 12）两种输出都识别为 `hevc`。
+
+**Enhanced RTMP 兼容性（细节，同步写进了 README）**：
+
+- **两套写法并存**：legacy `codecId=12`（非标准，但野外常见，FFmpeg 的 `FLV_CODECID_X_HEVC` 就是它）与 E-RTMP（`0x80|FrameType|PacketType` + FourCC）。入站**两种都收**，按视频 tag 首字节 bit7 判定，逐 tag 解析；同一进程可同时存在 legacy 与增强推流端，无需开关。
+- **出站全局二选一**：一个 FLV tag 只能有一种头。`[rtmp] enhanced=1`（默认）HEVC 写增强头；`0` 完全回到 legacy `codecId=12`（`onMetaData.videocodecid` 一并回到 12）。作用于 RTMP 播放、转推、HTTP-FLV/WS-FLV，只影响新连接；H.264 在两种模式下都保持 legacy；FLV 录像固定 legacy。
+- **`videocodecid` 必须跟着头走**：增强模式写 `'hvc1'` 的整数值 `1752589105`（实测本机 ffmpeg 8.1 生成的增强 FLV 就是它），legacy 写 `12`。混用会出现"头是增强、元数据自称 legacy"的自相矛盾，部分解析器据此选错分支。
+- **对端矩阵**：FFmpeg 8.x 两种都读（本机 8.1.2 实测双向）；FFmpeg 7.1+ 两种都读（增强自 7.1 起支持）；FFmpeg ≤ 7.0 只读 legacy，需 `enhanced=0`；OBS 30+ 推 HEVC/AV1 默认就是增强头，可直接收；浏览器 `mpegts.js`（管理页面预览）两种都不支持——FLV 里的 HEVC 本身不支持，与头格式无关。
+- **未实现/取舍**：`Multitrack`(6)、`ModEx`(7，纳秒时间戳) 只识别不使用；AV1/VP9 的 FourCC（`av01`/`vp09`）只识别不解码；不能按客户端分别选头（全局开关），若确有需求再加 `?enhanced=0` 之类的按请求覆盖。
+
+**仍未做**：MP4 固定 `hvc1`（未提供 `hev1` 开关）；H.265 叠加流未在真实 265 源上做端到端验证（解码走 ffmpeg 子进程，理论上与 H.264 一致）。
 
 **现状**：`CodecId.H265` 与 `getMediaList` 的 `"H265"` 字符串只是占位；`MediaTrack` 只有 `SetH264Config`；H.264 专用实现散在 `H264SpsParser` / `H264ConfigResolver` / `FlvMuxer`（AVC + `avcC`）/ `RtpPacketizer`（RFC 6184）/ `H264RtpDepacketizer` / `SdpBuilder` / `TsMuxer`（stream_type 0x1B）/ `Mp4Writer`（只写 `avcC`，注释已声明不支持 HEVC）/ `RtspPushSession` / `RtspPullClient`；RTSP SDP 解析现在明确拒绝 H265（有对应用例）。
 
@@ -223,7 +233,7 @@
 
 **验收**：单测覆盖—H265 SPS 解析宽高、RFC 7798 单包/AP/FU 解包、FLV `hvcC`、MP4 `hvcC` box、TS PMT `0x24`、RTSP H265 推流→播放端到端；实测—`ffmpeg -c:v libx265` 推流后 RTMP / HTTP-FLV / RTSP / MP4 / HLS 均可播。
 
-**风险**：enhanced RTMP 兼容性（老客户端只认 `codecId=12` legacy 头）；MP4 `hvc1` vs `hev1` 标签选择；浏览器对 HEVC 的支持差异（管理页面预览需回落到 FLV+扩展或提示）。
+**风险**：老客户端只认 `codecId=12` legacy 头（FFmpeg < 7.1 等），需设 `[rtmp] enhanced=0` 回落；MP4 `hvc1` vs `hev1` 标签选择；浏览器对 HEVC 的支持差异（管理页面预览需回落到 FLV+扩展或提示）。
 
 ### P2（M16）管理页面 ✅ 已完成
 

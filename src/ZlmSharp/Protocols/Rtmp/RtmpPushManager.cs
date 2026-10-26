@@ -25,16 +25,18 @@ public sealed class RtmpPushManager : IDisposable
 {
     private readonly MediaSourceRegistry _registry;
     private readonly RtmpLogHandler? _log;
+    private readonly RtmpPushOptions? _options;
     private readonly ConcurrentDictionary<StreamKey, Session> _sessions = new();
     private readonly object _gate = new();
     private int _disposed;
 
-    public RtmpPushManager(MediaSourceRegistry registry, RtmpLogHandler? log = null)
+    public RtmpPushManager(MediaSourceRegistry registry, RtmpLogHandler? log = null, RtmpPushOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
 
         _registry = registry;
         _log = log;
+        _options = options;
     }
 
     /// <summary>开始（或重启）一路转推。</summary>
@@ -63,10 +65,10 @@ public sealed class RtmpPushManager : IDisposable
 
             if (source.Video.Sps is null || source.Video.Pps is null)
             {
-                throw new InvalidOperationException($"源流还没有 H.264 参数集（未收到关键帧）：{key}");
+                throw new InvalidOperationException($"源流还没有视频参数集（未收到关键帧）：{key}");
             }
 
-            var session = new Session(key, source, url, _log);
+            var session = new Session(key, source, url, _log, _options);
             session.Start();
             _sessions[key] = session;
             return session.Snapshot();
@@ -133,6 +135,7 @@ public sealed class RtmpPushManager : IDisposable
         private readonly MediaSource _source;
         private readonly Uri _url;
         private readonly RtmpLogHandler? _log;
+        private readonly RtmpPushOptions? _options;
         private readonly CancellationTokenSource _cts = new();
         private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
 
@@ -144,12 +147,13 @@ public sealed class RtmpPushManager : IDisposable
         private string? _error;
         private int _disposed;
 
-        public Session(StreamKey key, MediaSource source, Uri url, RtmpLogHandler? log)
+        public Session(StreamKey key, MediaSource source, Uri url, RtmpLogHandler? log, RtmpPushOptions? options)
         {
             _key = key;
             _source = source;
             _url = url;
             _log = log;
+            _options = options;
         }
 
         public void Start() => _task = Task.Run(RunAsync);
@@ -200,6 +204,7 @@ public sealed class RtmpPushManager : IDisposable
                 await RtmpPushClient.RunAsync(
                         _url,
                         _source,
+                        _options,
                         onFrame: frame =>
                         {
                             if (_firstDts < 0)

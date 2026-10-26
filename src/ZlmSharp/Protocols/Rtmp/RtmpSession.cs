@@ -34,6 +34,9 @@ public sealed class RtmpSessionOptions
 
     /// <summary>播放时等待 SPS/PPS 就绪的时长（毫秒）。</summary>
     public int WaitTrackReadyMS { get; init; } = 2000;
+
+    /// <summary>HEVC 播放是否使用 Enhanced RTMP 视频头（关闭则退回 legacy codecId 12）。</summary>
+    public bool Enhanced { get; init; } = true;
 }
 
 /// <summary>
@@ -549,23 +552,26 @@ public sealed class RtmpSession
             return;
         }
 
-        var config = await H264ConfigResolver
+        var config = await VideoCodecConfigResolver
             .WaitAsync(source, _options.WaitTrackReadyMS, cancellationToken)
             .ConfigureAwait(false);
         if (config is null)
         {
             ReleasePlaySession();
-            await SendStatusAsync("NetStream.Play.Failed", "流未就绪（缺少 SPS/PPS）", cancellationToken, _playStreamId)
+            await SendStatusAsync("NetStream.Play.Failed", "流未就绪（缺少视频参数集）", cancellationToken, _playStreamId)
                 .ConfigureAwait(false);
             return;
         }
 
-        var muxer = new FlvMuxer(config, new FlvMetadata
-        {
-            Width = source.Video.Width,
-            Height = source.Video.Height,
-            FrameRate = source.Video.Fps > 0 ? source.Video.Fps : 25,
-        });
+        var muxer = new FlvMuxer(
+            config,
+            new FlvMetadata
+            {
+                Width = source.Video.Width,
+                Height = source.Video.Height,
+                FrameRate = source.Video.Fps > 0 ? source.Video.Fps : 25,
+            },
+            enhancedRtmp: _options.Enhanced);
 
         _playSource = source;
         _playMuxer = muxer;

@@ -14,15 +14,17 @@ internal delegate ValueTask FlvWriteHandler(ReadOnlyMemory<byte> data, Cancellat
 /// </summary>
 internal static class FlvLiveStream
 {
+    /// <param name="enhancedRtmp">HEVC 是否写 Enhanced RTMP 视频头（由 <c>[rtmp] enhanced</c> 控制）。</param>
     public static async Task<(int Frames, long Bytes)> RunAsync(
         MediaSource source,
         VideoCodecConfig config,
         FlvMetadata metadata,
         FlvWriteHandler write,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool enhancedRtmp = false)
     {
         var sink = source.CreateReader();
-        var muxer = new FlvMuxer(config, metadata);
+        var muxer = new FlvMuxer(config, metadata, enhancedRtmp: enhancedRtmp);
         var tagBuffer = new ArrayBufferWriter<byte>(64 * 1024);
 
         long bytes = 0;

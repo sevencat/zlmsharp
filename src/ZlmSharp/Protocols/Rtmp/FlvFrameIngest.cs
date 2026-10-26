@@ -35,29 +35,35 @@ public sealed class FlvFrameIngest
 
     public void Video(ReadOnlySpan<byte> payload, long dts)
     {
-        if (payload.Length < 5)
+        if (!FlvVideoTagHeader.TryParse(payload, out var header))
         {
-            return;
-        }
-
-        var frameType = (payload[0] >> 4) & 0x0F;
-        var codecId = payload[0] & 0x0F;
-        var isHevc = codecId == FlvConstants.VideoCodecHevc;
-        if (codecId != FlvConstants.VideoCodecAvc && !isHevc)
-        {
-            if (!_warnedUnsupportedVideo)
+            if (!_warnedUnsupportedVideo && payload.Length >= 5)
             {
                 _warnedUnsupportedVideo = true;
-                Log(RtmpLogLevel.Warning, $"暂不支持的 RTMP 视频编码 id={codecId}（支持 H.264 / H.265）");
+                Log(RtmpLogLevel.Warning,
+                    $"暂不支持的 RTMP 视频编码 id={payload[0] & FlvConstants.VideoCodecIdMask}（支持 H.264 / H.265）");
             }
 
             return;
         }
 
-        var packetType = payload[1];
-        var body = payload[5..];
+        if (!header.IsAvc && !header.IsHevc)
+        {
+            if (!_warnedUnsupportedVideo)
+            {
+                _warnedUnsupportedVideo = true;
+                var codec = header.IsEnhanced ? $"FourCC=0x{header.FourCc:X8}" : $"id={header.CodecId}";
+                Log(RtmpLogLevel.Warning, $"暂不支持的 RTMP 视频编码 {codec}（支持 H.264 / H.265）");
+            }
 
-        if (packetType == 0)
+            return;
+        }
+
+        var isHevc = header.IsHevc;
+        var frameType = header.FrameType;
+        var body = payload[header.PayloadOffset..];
+
+        if (header.IsSequenceHeader)
         {
             if (isHevc)
             {
@@ -116,8 +122,9 @@ public sealed class FlvFrameIngest
             return;
         }
 
-        if (packetType != 1)
+        if (!header.IsCodedFrames)
         {
+            // SequenceEnd / Metadata / Multitrack / ModEx 等：不是图像帧
             return;
         }
 
@@ -136,7 +143,7 @@ public sealed class FlvFrameIngest
             return;
         }
 
-        var compositionTime = ReadInt24(payload, 2);
+        var compositionTime = header.CompositionTime;
         var isKeyFrame = frameType == 1 || (isHevc
             ? ContainsH265KeyFrame(body, lengthSize)
             : H264Avcc.ContainsIdr(body, lengthSize));
@@ -239,12 +246,6 @@ public sealed class FlvFrameIngest
         var sampleRate = frequencyIndex < AacSampleRates.Length ? AacSampleRates[frequencyIndex] : 0;
 
         return (sampleRate, channelConfig);
-    }
-
-    private static int ReadInt24(ReadOnlySpan<byte> buffer, int offset)
-    {
-        var value = (buffer[offset] << 16) | (buffer[offset + 1] << 8) | buffer[offset + 2];
-        return (value & 0x800000) != 0 ? value - 0x1000000 : value;
     }
 
     private void Log(RtmpLogLevel level, string message) => _log?.Invoke(level, message);

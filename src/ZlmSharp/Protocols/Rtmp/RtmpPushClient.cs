@@ -19,6 +19,9 @@ public sealed class RtmpPushOptions
 
     /// <summary>发送块大小（提高到 4096 可显著减少大帧的 chunk 头开销）。</summary>
     public int ChunkSize { get; init; } = 4096;
+
+    /// <summary>HEVC 转推是否使用 Enhanced RTMP 视频头（关闭则退回 legacy codecId 12）。</summary>
+    public bool Enhanced { get; init; } = true;
 }
 
 /// <summary>
@@ -49,7 +52,7 @@ public static class RtmpPushClient
         }
 
         var config = VideoCodecConfigResolver.Resolve(source)
-            ?? throw new InvalidOperationException($"流还没有 H.264 参数集，无法转推：{source.Key}");
+            ?? throw new InvalidOperationException($"流还没有视频参数集，无法转推：{source.Key}");
 
         var settings = options ?? new RtmpPushOptions();
         var muxer = new FlvMuxer(
@@ -62,7 +65,8 @@ public static class RtmpPushClient
             },
             source.Audio.AudioSpecificConfig ?? default,
             source.Audio.SampleRate,
-            source.Audio.Channels);
+            source.Audio.Channels,
+            settings.Enhanced);
 
         using var client = new TcpClient { NoDelay = true };
 

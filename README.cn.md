@@ -6,7 +6,7 @@
 
 [English](README.md) | **简体中文**
 
-- RTMP 推/播、RTSP 推/播（TCP interleaved + UDP）、HTTP-FLV、WebSocket-FLV
+- RTMP 推/播（HEVC 走 Enhanced RTMP 的 `hvc1` 扩展头）、RTSP 推/播（TCP interleaved + UDP）、HTTP-FLV、WebSocket-FLV；视频 H.264 / H.265
 - 每路流一个 `MediaSource`：环形缓冲、GOP 快照、按读者分发并统计各读者丢帧
 - MP4 / FLV / HLS(TS) 录制、RTMP 转推、RTSP/RTMP 拉流代理
 - hook（`on_publish` / `on_play` / `on_stream_none_reader`）、会话管理、无人观看回收
@@ -147,7 +147,7 @@ assets/                 app.ico（多尺寸）与 app-icon.png，由 tools/make-
 
 ```bash
 dotnet build zlmsharp.sln                       # 警告即错误，AOT 分析器全开
-dotnet test  tests/ZlmSharp.Tests               # 238 个用例
+dotnet test  tests/ZlmSharp.Tests               # 268 个用例
 dotnet publish src/ZlmSharp.Cli -c Release -r win-x64   # NativeAOT 单文件
 ```
 
@@ -161,11 +161,74 @@ ZLM_YOLO_TEST_MODEL=<path-to.onnx> dotnet test --filter YoloModelSmokeTests
 
 ## 已知限制
 
-- 视频仅 H.264（不支持 H.265），音频为 AAC。
+- 视频 H.264 / H.265，音频仅 AAC。HEVC 的 FLV 头有 legacy（`codecId=12`）与 Enhanced RTMP 两种写法，兼容性细节见下文「Enhanced RTMP 兼容性」。
 - RTSP 拉流代理只走 TCP interleaved；RTSP 推流侧会回 RR，但从不发 SR。
 - HLS 目前只是录制格式，`protocol.enable_hls` 仅完成配置绑定，未接到播放侧。
 - MP4 需要停止录制后才可播放（moov 在收尾时写），要对崩溃宽容请用 FLV。
 - 单进程、状态在内存：无集群，无 RTSP/RTMP over SSL，无 WebRTC。
+
+## Enhanced RTMP 兼容性（HEVC 的两种 FLV 头）
+
+HEVC 放进 FLV/RTMP 时存在两套互不兼容的写法，本服务**两边都处理**：接收两种，发送可切换。
+
+### 两种写法的差异
+
+| 项 | legacy（非标准，野外常见） | Enhanced RTMP（E-RTMP v1/v2） |
+|---|---|---|
+| 视频 tag 首字节 | `[FrameType:4][CodecId:4]`，HEVC 固定 `codecId=12`：关键帧 `0x1C`、普通帧 `0x2C` | `0x80 \| [FrameType:3][PacketType:4]`：序列头 `0x90`、关键帧 `0x93`、普通帧 `0xA1` |
+| 编解码器标识 | 首字节低 4 位 = 12 | 首字节后 4 字节 FourCC `'hvc1'` |
+| 配置帧 | 第 2 字节 `AVCPacketType=0` + `hvcC` | `PacketType=0`（SequenceStart）+ `hvcC` |
+| 编码帧 | 第 2 字节 `AVCPacketType=1` + 固定 3 字节 CTS + AVCC 负载 | `PacketType=1`（CodedFrames）带 3 字节 CTS；`PacketType=3`（CodedFramesX）省略 CTS，视为 0 |
+| `onMetaData.videocodecid` | `12` | `1752589105`（`'hvc1'` 的整数值，与 FFmpeg 8.x / OBS 实测一致） |
+
+### 接收（推流、拉流代理）
+
+两种格式**自动识别、无需配置**：按视频 tag 首字节 bit7 判定，逐 tag 解析，同一进程里可以同时有 legacy 与增强的推流端。
+
+- bit7 = 0 且低 4 位 = 12：按 legacy 解析（第 2 字节当 `AVCPacketType`，第 3~5 字节当 CTS）
+- bit7 = 1：按增强解析（读 FourCC 与 `PacketType`，`CodedFramesX` 的 CTS 记 0）
+- `PacketType=2/4/6/7`（SequenceEnd / Metadata / Multitrack / ModEx）：忽略，不当作图像帧
+- H.264（低 4 位 = 7）保持不变，仍走 legacy
+
+### 发送（播放、转推、HTTP-FLV/WS-FLV）
+
+一个 FLV tag 只能有一种头，所以输出是**全局二选一**，配置在 `zlmsharp.ini`：
+
+```ini
+[rtmp]
+; 1 = HEVC 用增强头（默认）；0 = 退回 legacy codecId=12
+enhanced=1
+```
+
+- 同一开关同时作用于 RTMP 播放、RTMP 转推、HTTP-FLV、WS-FLV；只影响新建立的连接（已连接的流不重协商）。
+- 两种模式下 **H.264 都保持 legacy**（`0x17` / `0x27`）：规范里 `avc1` 增强头只用于多轨场景，legacy 兼容性最好。
+- `onMetaData.videocodecid` 跟着变：增强模式写 `1752589105`，legacy 模式写 `12`。
+- FLV 录像**固定写 legacy**，保证老播放器与 ffmpeg 工具链都能读文件。
+
+### 对端支持情况
+
+| 对端 | 收增强头 | 收 legacy 12 | 说明 |
+|---|---|---|---|
+| FFmpeg 8.x | ✅ | ✅ | 本机 8.1.2 实测双向 |
+| FFmpeg 7.1+ | ✅ | ✅ | 增强头支持从 7.1 开始 |
+| FFmpeg ≤ 7.0 | ❌ | ✅ | 只认 legacy，需要 `enhanced=0` |
+| 浏览器 `mpegts.js`（管理页面预览） | ❌ | ❌ | 不支持 FLV 里的 HEVC，与头格式无关；看 HEVC 请用 RTSP 或支持 `hvc1` 的播放器 |
+
+OBS 30+ 推 HEVC/AV1 时默认就发增强头，本服务可直接接收，不需要额外配置。
+
+### 实测记录
+
+本机 FFmpeg 8.1.2（`ZLM_FFMPEG_TEST_PATH` 指向该 exe）：
+
+1. `ffmpeg -c:v libx265 -f flv` 推流 → 本服务解析出 H265 320x240（增强头入站）；
+2. ffprobe 从本服务 RTMP 拉流：`enhanced=1` 与 `enhanced=0` 两种输出都识别为 `hevc`、宽 320；
+3. 与本机 ffmpeg 生成的增强 FLV 对拍：视频 tag 首字节同样是 `0x90` + `'hvc1'`，`videocodecid` 同样是 `1752589105`，与本服务输出一致。
+
+### 仍未支持
+
+- `PacketType=6`（Multitrack）、`7`（ModEx / 纳秒时间戳）只识别不用；
+- AV1 / VP9 的 FourCC（`av01` / `vp09`）能识别但不解码；
+- 无法按客户端分别选头：目前只能全局切换，若需要 `?enhanced=0` 这类按请求覆盖再另行实现。
 
 ## 路线图
 
