@@ -19,12 +19,14 @@ internal sealed class RtmpPublishClient : IAsyncDisposable
         _stream = stream;
     }
 
+    /// <param name="expectedPublishCode">publish 的 onStatus code；被 hook 拒绝时传 <c>NetStream.Publish.Failed</c>。</param>
     public static async Task<RtmpPublishClient> ConnectAsync(
         string host,
         int port,
         string app,
         string stream,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string expectedPublishCode = "NetStream.Publish.Start")
     {
         var client = new TcpClient { NoDelay = true };
         await client.ConnectAsync(host, port, cancellationToken);
@@ -56,7 +58,7 @@ internal sealed class RtmpPublishClient : IAsyncDisposable
                 Amf0Value.Null,
                 Amf0Value.String(stream),
                 Amf0Value.String("live"));
-            Assert.Equal("NetStream.Publish.Start", await publisher.ReadCodeAsync("onStatus", cancellationToken));
+            Assert.Equal(expectedPublishCode, await publisher.ReadCodeAsync("onStatus", cancellationToken));
 
             return publisher;
         }

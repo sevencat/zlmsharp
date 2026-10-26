@@ -53,16 +53,25 @@ public sealed class MediaSourceRegistry
         return false;
     }
 
-    /// <summary>关闭并移除无人观看且超过空闲时间的流，返回移除数量。</summary>
-    public int CleanupIdle(TimeSpan idleTimeout, DateTime? now = null)
+    /// <summary>
+    /// 关闭并移除无人观看且空闲超过 <paramref name="idleTimeout"/> 的流，返回移除数量。
+    /// 「空闲」从最后一个读者离开算起；从未有人观看时从创建时间算起。
+    /// <paramref name="predicate"/> 用于叠加额外条件（例如是否允许关闭正在推流的流）。
+    /// </summary>
+    public int CleanupIdle(TimeSpan idleTimeout, Func<MediaSource, bool>? predicate = null, DateTime? now = null)
     {
-        var deadline = (now ?? DateTime.UtcNow) - idleTimeout;
+        var current = now ?? DateTime.UtcNow;
         var removed = 0;
 
         foreach (var pair in _sources)
         {
             var source = pair.Value;
-            if (source.ReaderCount > 0 || source.LastFrameAt > deadline)
+            if (source.ReaderCount > 0 || current - source.IdleSince < idleTimeout)
+            {
+                continue;
+            }
+
+            if (predicate is not null && !predicate(source))
             {
                 continue;
             }

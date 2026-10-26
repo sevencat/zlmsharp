@@ -59,4 +59,35 @@ public class MediaSourceRegistryTests
         Assert.False(watched.IsClosed);
         sink.Dispose();
     }
+
+    [Fact]
+    public async Task CleanupIdle_CountsIdleFromLastReaderLeave()
+    {
+        var registry = new MediaSourceRegistry();
+        var source = registry.GetOrCreate(Key, "live");
+        var sink = source.CreateReader();
+
+        await Task.Delay(50);
+        Assert.Equal(0, registry.CleanupIdle(TimeSpan.FromMilliseconds(200)));
+
+        source.RemoveReader(sink);
+        Assert.Equal(0, registry.CleanupIdle(TimeSpan.FromMilliseconds(200)));
+
+        await Task.Delay(250);
+        Assert.Equal(1, registry.CleanupIdle(TimeSpan.FromMilliseconds(200)));
+        Assert.True(source.IsClosed);
+    }
+
+    [Fact]
+    public void CleanupIdle_RespectsPredicate()
+    {
+        var registry = new MediaSourceRegistry();
+        var source = registry.GetOrCreate(Key, "live");
+
+        Assert.Equal(0, registry.CleanupIdle(TimeSpan.Zero, _ => false));
+        Assert.False(source.IsClosed);
+
+        Assert.Equal(1, registry.CleanupIdle(TimeSpan.Zero, _ => true));
+        Assert.True(source.IsClosed);
+    }
 }

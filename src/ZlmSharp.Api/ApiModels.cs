@@ -27,7 +27,8 @@ public sealed record ApiMediaInfo(
     double VideoFps,
     string AudioCodec,
     int AudioSampleRate,
-    int AudioChannels);
+    int AudioChannels,
+    long DropFrames);
 
 public sealed record ApiMediaListResponse(int Code, IReadOnlyList<ApiMediaInfo> Data);
 

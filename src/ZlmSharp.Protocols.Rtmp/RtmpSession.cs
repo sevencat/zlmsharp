@@ -302,8 +302,9 @@ public sealed class RtmpSession
             return;
         }
 
-        _publishSession = session;
+        // 先 OpenSource（内部会 CloseSource 注销旧会话），再登记新会话，避免刚注册就被清掉
         OpenSource(key);
+        _publishSession = session;
         await SendStatusAsync("NetStream.Publish.Start", $"Start publishing {_key.Stream}", cancellationToken)
             .ConfigureAwait(false);
     }

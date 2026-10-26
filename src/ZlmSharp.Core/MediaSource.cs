@@ -50,7 +50,49 @@ public sealed class MediaSource : IDisposable
 
     public long LastDts { get; private set; }
 
+    /// <summary>最后一个观看者离开的时间；从未有人观看时为 null。</summary>
+    public DateTime? LastReaderLeftAt { get; private set; }
+
+    /// <summary>无人观看的起点：末个读者离开时间，没有读者时回落到创建时间。</summary>
+    public DateTime IdleSince => LastReaderLeftAt ?? CreatedAt;
+
     public bool IsClosed => Volatile.Read(ref _closed) != 0;
+
+    /// <summary>所有观看者队列当前累计丢弃的帧数（慢客户端指标）。</summary>
+    public long TotalDroppedFrames
+    {
+        get
+        {
+            lock (_gate)
+            {
+                long total = 0;
+                foreach (var sink in _sinks.Values)
+                {
+                    total += sink.DroppedFrames;
+                }
+
+                return total;
+            }
+        }
+    }
+
+    /// <summary>所有观看者队列当前积压的帧数。</summary>
+    public long TotalPendingFrames
+    {
+        get
+        {
+            lock (_gate)
+            {
+                long total = 0;
+                foreach (var sink in _sinks.Values)
+                {
+                    total += sink.PendingCount;
+                }
+
+                return total;
+            }
+        }
+    }
 
     /// <summary>历史累计观看次数。</summary>
     public long TotalReaderCount => Volatile.Read(ref _totalReaderCount);
@@ -128,6 +170,11 @@ public sealed class MediaSource : IDisposable
             }
 
             count = _sinks.Count;
+            if (count == 0)
+            {
+                // 从这一刻开始计入「无人观看」时长
+                LastReaderLeftAt = DateTime.UtcNow;
+            }
         }
 
         sink.Close();

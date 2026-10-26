@@ -86,6 +86,17 @@ public static class ZlmSharpHostingExtensions
             });
         }
 
+        if (runtime.Options.General.StreamNoneReaderDelayMS > 0)
+        {
+            services.AddSingleton<IHostedService>(provider =>
+                new IdleStreamCleanupService(
+                    runtime.Options,
+                    provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
+                    provider.GetRequiredService<ZlmSharp.Core.MediaSessionRegistry>(),
+                    provider.GetRequiredService<Hooks.MediaHookService>(),
+                    provider.GetRequiredService<ILoggerFactory>()));
+        }
+
         if (settings.RegisterStreamListeners)
         {
             if (runtime.Options.Rtsp.Port > 0)

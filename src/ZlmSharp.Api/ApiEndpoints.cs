@@ -16,9 +16,9 @@ using ZlmSharp.Protocols.Rtmp;
 namespace ZlmSharp.Api;
 
 /// <summary>
-/// <c>/index/api/*</c> 端点：version / getApiList / getMediaList / close_streams / yoloInfo / yoloDetect /
-/// getYoloResult / startYoloOverlay / stopYoloOverlay / getYoloOverlay / startRecord / stopRecord / isRecording /
-/// addStreamProxy / delStreamProxy。
+/// <c>/index/api/*</c> 端点：version / getApiList / getMediaList / close_streams / getSessionList / kick_session /
+/// yoloInfo / yoloDetect / getYoloResult / startYoloOverlay / stopYoloOverlay / getYoloOverlay /
+/// startRecord / stopRecord / isRecording / startPush / stopPush / getPushList / addStreamProxy / delStreamProxy。
 /// 返回体与 ZLM 保持一致（<c>code</c>/<c>msg</c>/<c>data</c> 字段）。
 /// </summary>
 public static class ApiEndpoints
@@ -883,6 +883,141 @@ public static class ApiEndpoints
             ApiJsonContext.Default.ApiCloseStreamsResponse);
     }
 
+    private static async Task SessionListAsync(
+        HttpContext context,
+        AppOptions options,
+        MediaSessionRegistry? sessions)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getSessionList");
+
+        if (sessions is null)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiSessionListResponse(0, []),
+                ApiJsonContext.Default.ApiSessionListResponse);
+            return;
+        }
+
+        var vhost = context.Request.Query["vhost"].ToString();
+        var app = context.Request.Query["app"].ToString();
+        var stream = context.Request.Query["stream"].ToString();
+        var schema = context.Request.Query["schema"].ToString();
+        var type = context.Request.Query["type"].ToString();
+        var now = DateTime.UtcNow;
+
+        var data = new List<ApiSessionInfo>();
+        foreach (var session in sessions.Snapshot())
+        {
+            if (!MatchesFilter(session.Key.Vhost, vhost) ||
+                !MatchesFilter(session.Key.App, app) ||
+                !MatchesFilter(session.Key.Stream, stream) ||
+                !MatchesFilter(session.Schema, schema) ||
+                !MatchesType(session.Type, type))
+            {
+                continue;
+            }
+
+            data.Add(new ApiSessionInfo(
+                session.Id,
+                session.Schema,
+                SessionTypeName(session.Type),
+                session.Key.Vhost,
+                session.Key.App,
+                session.Key.Stream,
+                session.Ip ?? string.Empty,
+                session.Port,
+                (long)Math.Max(0, (now - session.CreatedAt).TotalSeconds),
+                session.UserAgent));
+        }
+
+        await WriteJsonAsync(
+            context,
+            new ApiSessionListResponse(0, data),
+            ApiJsonContext.Default.ApiSessionListResponse);
+    }
+
+    /// <summary>踢掉推流/播放会话：<c>id=</c> 精确匹配，或按 vhost/app/stream/type 批量。</summary>
+    private static async Task KickSessionAsync(
+        HttpContext context,
+        AppOptions options,
+        MediaSessionRegistry? sessions)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "kick_session");
+
+        if (sessions is null)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiErrorResponse(-1, "会话注册表未启用"),
+                ApiJsonContext.Default.ApiErrorResponse);
+            return;
+        }
+
+        var id = context.Request.Query["id"].ToString();
+        var vhost = context.Request.Query["vhost"].ToString();
+        var app = context.Request.Query["app"].ToString();
+        var stream = context.Request.Query["stream"].ToString();
+        var schema = context.Request.Query["schema"].ToString();
+        var type = context.Request.Query["type"].ToString();
+
+        IReadOnlyList<MediaSessionInfo> kicked;
+        if (id.Length > 0)
+        {
+            kicked = sessions.Kick(info => string.Equals(info.Id, id, StringComparison.Ordinal));
+        }
+        else
+        {
+            if (vhost.Length == 0 && app.Length == 0 && stream.Length == 0 && schema.Length == 0 && type.Length == 0)
+            {
+                await WriteJsonAsync(
+                    context,
+                    new ApiErrorResponse(-1, "需要 id 或至少一个过滤条件"),
+                    ApiJsonContext.Default.ApiErrorResponse);
+                return;
+            }
+
+            kicked = sessions.Kick(info =>
+                MatchesFilter(info.Key.Vhost, vhost) &&
+                MatchesFilter(info.Key.App, app) &&
+                MatchesFilter(info.Key.Stream, stream) &&
+                MatchesFilter(info.Schema, schema) &&
+                MatchesType(info.Type, type));
+        }
+
+        var ids = new string[kicked.Count];
+        for (var index = 0; index < kicked.Count; index++)
+        {
+            ids[index] = kicked[index].Id;
+        }
+
+        await WriteJsonAsync(
+            context,
+            new ApiKickSessionResponse(0, new ApiKickSessionData(kicked.Count, ids)),
+            ApiJsonContext.Default.ApiKickSessionResponse);
+    }
+
+    private static bool MatchesType(MediaSessionType type, string filter) => filter.ToLowerInvariant() switch
+    {
+        "" => true,
+        "publish" or "publisher" => type == MediaSessionType.Publisher,
+        "play" or "player" => type == MediaSessionType.Player,
+        _ => false,
+    };
+
+    private static string SessionTypeName(MediaSessionType type) =>
+        type == MediaSessionType.Publisher ? "publish" : "play";
+
     private static bool Matches(MediaSource source, string vhost, string app, string stream, string schema) =>
         MatchesFilter(source.Key.Vhost, vhost) &&
         MatchesFilter(source.Key.App, app) &&
@@ -917,7 +1052,8 @@ public static class ApiEndpoints
         source.Video.Fps,
         CodecName(source.Audio.CodecId),
         source.Audio.SampleRate,
-        source.Audio.Channels);
+        source.Audio.Channels,
+        source.TotalDroppedFrames);
 
     private static string CodecName(CodecId codecId) => codecId switch
     {

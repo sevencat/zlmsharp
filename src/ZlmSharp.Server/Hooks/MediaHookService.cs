@@ -59,16 +59,16 @@ public sealed class MediaHookService
         payload.Type = isPublish ? "publish" : "play";
 
         var name = isPublish ? "on_publish" : "on_play";
-        var (ok, code, message) = await PostAsync(url, payload, name, cancellationToken).ConfigureAwait(false);
-        if (!ok)
+        var response = await PostAsync(url, payload, name, cancellationToken).ConfigureAwait(false);
+        if (!response.Ok)
         {
             _logger.LogWarning(
                 "{Hook} 拒绝 {Key}（code={Code}, {Message}）",
                 name,
                 context.Key,
-                code,
-                message);
-            return MediaHookResult.Deny(message ?? $"{name} 拒绝", code);
+                response.Code,
+                response.Message);
+            return MediaHookResult.Deny(response.Message ?? $"{name} 拒绝", response.Code);
         }
 
         _logger.LogDebug("{Hook} 放行 {Key}", name, context.Key);
@@ -94,23 +94,24 @@ public sealed class MediaHookService
         var payload = NewPayload(schema, key, id);
         payload.Type = "none_reader";
 
-        var (ok, code, message) = await PostAsync(
+        var response = await PostAsync(
                 hook.OnStreamNoneReader,
                 payload,
                 "on_stream_none_reader",
                 cancellationToken)
             .ConfigureAwait(false);
 
-        if (!ok)
+        // fail_open 或调用失败都不关流（保守）
+        if (!response.Ok || response.FailOpen)
         {
             _logger.LogWarning(
-                "on_stream_none_reader 调用失败，保留流 {Key}（{Message}）",
+                "on_stream_none_reader 未给出明确结果，保留流 {Key}（{Message}）",
                 key,
-                message);
+                response.Message);
             return false;
         }
 
-        return code == 0;
+        return response.Code == 0;
     }
 
     private static HookPayload NewPayload(string schema, StreamKey key, string? id) => new()
@@ -122,7 +123,10 @@ public sealed class MediaHookService
         Id = id,
     };
 
-    private async Task<(bool Ok, int Code, string? Message)> PostAsync(
+    /// <summary>一次 hook 调用结果；<see cref="FailOpen"/> 表示放行是 fail_open 兜底而非外部明确同意。</summary>
+    private readonly record struct HookResponse(bool Ok, int Code, string? Message, bool FailOpen);
+
+    private async Task<HookResponse> PostAsync(
         string url,
         HookPayload payload,
         string hookName,
@@ -152,7 +156,12 @@ public sealed class MediaHookService
                 if (!response.IsSuccessStatusCode)
                 {
                     var text = await SafeReadAsync(response, timeoutCts.Token).ConfigureAwait(false);
-                    return (false, (int)response.StatusCode, $"HTTP {(int)response.StatusCode} {text}".Trim());
+                    var failure = $"HTTP {(int)response.StatusCode} {text}".Trim();
+
+                    // 非 2xx 视为 hook 不可用：默认拒绝，fail_open 时放行
+                    return _options.Hook.FailOpen
+                        ? new HookResponse(true, 0, failure, FailOpen: true)
+                        : new HookResponse(false, (int)response.StatusCode, failure, FailOpen: false);
                 }
 
                 await using var body = await response.Content
@@ -176,7 +185,7 @@ public sealed class MediaHookService
                     ? msgElement.GetString()
                     : null;
 
-                return (code == 0, code, message);
+                return new HookResponse(code == 0, code, message, FailOpen: false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -206,7 +215,9 @@ public sealed class MediaHookService
                 _logger.LogError(exception, "{Hook} 调用失败 {Url}", hookName, url);
 
                 // 鉴权 hook 失败时默认拒绝（fail-closed），可通过 hook.fail_open=1 改为放行
-                return _options.Hook.FailOpen ? (true, 0, message) : (false, -1, message);
+                return _options.Hook.FailOpen
+                    ? new HookResponse(true, 0, message, FailOpen: true)
+                    : new HookResponse(false, -1, message, FailOpen: false);
             }
         }
     }

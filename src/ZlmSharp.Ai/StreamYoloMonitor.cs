@@ -6,12 +6,12 @@ using ZlmSharp.Core;
 namespace ZlmSharp.Ai;
 
 /// <summary>
-/// 在线流定时 YOLO 检测：每 <c>ZLM_YOLO_SAMPLE_INTERVAL_MS</c> 用 ffmpeg 从本地 HTTP-FLV 抓一帧，
+/// 在线流定时 YOLO 检测：每 <c>ZLM_YOLO_SAMPLE_INTERVAL_MS</c> 从常驻解码器取最新一帧，
 /// 推理后把结果写进 <see cref="YoloResultStore"/>（<c>getYoloResult</c> 读取）。
 /// </summary>
 /// <remarks>
-/// 每次采样起一个 ffmpeg 进程（本项目没有内置 H.264 解码器），并用信号量保证同时只有一个采样在跑。
-/// 单路、秒级间隔够用；多路高帧率场景需要改成常驻解码器。
+/// 解码走 <see cref="FfmpegDecoderPool"/>：一路流一个常驻 ffmpeg 子进程，持续输出 RGB24，
+/// 采样时只取最新帧，不再为每次采样新建进程。信号量保证同一时刻只有一路在推理（SimdYolo 会话不可重入）。
 /// </remarks>
 internal sealed class StreamYoloMonitor : BackgroundService
 {
@@ -21,6 +21,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
     private readonly YoloDetectorService _detector;
     private readonly MediaSourceRegistry _registry;
     private readonly YoloResultStore _store;
+    private readonly FfmpegDecoderPool _decoders;
     private readonly AppOptions _options;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -31,12 +32,14 @@ internal sealed class StreamYoloMonitor : BackgroundService
         YoloDetectorService detector,
         MediaSourceRegistry registry,
         YoloResultStore store,
+        FfmpegDecoderPool decoders,
         AppOptions options,
         ILoggerFactory loggerFactory)
     {
         _detector = detector;
         _registry = registry;
         _store = store;
+        _decoders = decoders;
         _options = options;
         _logger = loggerFactory.CreateLogger("ZlmSharp.Yolo");
     }
@@ -79,6 +82,7 @@ internal sealed class StreamYoloMonitor : BackgroundService
                     {
                         _lastRun.Remove(key);
                         _trackers.Remove(key);
+                        _decoders.Remove(key);
                         _store.Remove(key.Vhost, key.App, key.Stream);
                         continue;
                     }
@@ -121,9 +125,17 @@ internal sealed class StreamYoloMonitor : BackgroundService
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var image = await FfmpegFrameGrabber
-                .GrabAsync(_options.Env.ResolveFfmpegPath(), BuildFlvUrl(key), GrabTimeout, cancellationToken)
-                .ConfigureAwait(false);
+            var width = source.Video.Width;
+            var height = source.Video.Height;
+            if (width <= 0 || height <= 0)
+            {
+                throw new InvalidOperationException("流分辨率未知，常驻解码器无法确定帧尺寸");
+            }
+
+            var image = await _decoders
+                .ReadFrameAsync(key, BuildFlvUrl(key), width, height, GrabTimeout, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new TimeoutException("常驻解码器未在超时时间内产出帧");
 
             var result = await _detector.DetectAsync(image, cancellationToken: cancellationToken).ConfigureAwait(false);
 

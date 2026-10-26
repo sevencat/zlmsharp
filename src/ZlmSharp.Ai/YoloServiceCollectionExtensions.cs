@@ -24,6 +24,9 @@ public static class YoloServiceCollectionExtensions
             provider.GetRequiredService<YoloResultStore>(),
             provider.GetRequiredService<AppOptions>(),
             provider.GetService<ILoggerFactory>()?.CreateLogger<YoloOverlayManager>()));
+        services.AddSingleton(provider => new FfmpegDecoderPool(
+            env.ResolveFfmpegPath(),
+            provider.GetService<ILoggerFactory>()?.CreateLogger<FfmpegDecoderPool>()));
         services.AddHostedService<StreamYoloMonitor>();
         return services;
     }
