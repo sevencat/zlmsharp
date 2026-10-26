@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ZlmSharp.Codecs</RootNamespace>
+    <AssemblyName>ZlmSharp.Codecs</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp.Core\ZlmSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

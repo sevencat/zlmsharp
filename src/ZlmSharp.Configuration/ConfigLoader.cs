@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace ZlmSharp.Configuration;
@@ -87,8 +88,29 @@ public static class ConfigLoader
         env.FfmpegBin = document.Get(EnvOptions.FfmpegBinKey, string.Empty);
         env.FfprobeBin = document.Get(EnvOptions.FfprobeBinKey, string.Empty);
         env.RecordRoot = document.Get(EnvOptions.RecordRootKey, string.Empty);
+        env.YoloModelDir = document.Get(EnvOptions.YoloModelDirKey, string.Empty);
         env.YoloModel = document.Get(EnvOptions.YoloModelKey, string.Empty);
         env.YoloEndpoint = document.Get(EnvOptions.YoloEndpointKey, string.Empty);
+        env.YoloDevice = document.Get(EnvOptions.YoloDeviceKey, env.YoloDevice);
+        env.YoloConfidence = ParseFloat(document.Get(EnvOptions.YoloConfidenceKey, string.Empty), env.YoloConfidence);
+        env.YoloInputWidth = ParseInt(document.Get(EnvOptions.YoloInputWidthKey, string.Empty), env.YoloInputWidth, 32, 8192);
+        env.YoloInputHeight = ParseInt(document.Get(EnvOptions.YoloInputHeightKey, string.Empty), env.YoloInputHeight, 32, 8192);
+        env.YoloCpuThreads = ParseInt(document.Get(EnvOptions.YoloCpuThreadsKey, string.Empty), env.YoloCpuThreads, 0, 256);
+        env.YoloSampleIntervalMs = ParseInt(
+            document.Get(EnvOptions.YoloSampleIntervalMsKey, string.Empty),
+            env.YoloSampleIntervalMs,
+            0,
+            3_600_000);
         env.Raw = new Dictionary<string, string>(document.Values, StringComparer.OrdinalIgnoreCase);
     }
+
+    private static float ParseFloat(string text, float fallback) =>
+        float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value is >= 0f and <= 1f
+            ? value
+            : fallback;
+
+    private static int ParseInt(string text, int fallback, int min, int max) =>
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value >= min && value <= max
+            ? value
+            : fallback;
 }

@@ -36,7 +36,7 @@ internal abstract class TcpListenerHostedService : BackgroundService
             return;
         }
 
-        _logger.LogInformation("{Protocol} 监听 0.0.0.0:{Port}（协议实现待 M5/M6）", Protocol, port);
+        _logger.LogInformation("{Protocol} 监听 0.0.0.0:{Port}", Protocol, port);
 
         try
         {

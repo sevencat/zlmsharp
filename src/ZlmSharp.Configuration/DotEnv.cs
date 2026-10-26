@@ -215,8 +215,21 @@ public static class DefaultEnv
         ZLM_FFPROBE_BIN=
         # 录像根目录（留空则用 zlmsharp.ini 中的 protocol.mp4_save_path）
         ZLM_RECORD_ROOT=
-        # YOLO 检测（后期功能）：模型路径与推理服务地址
+        # YOLO 检测（SimdYolo 纯托管推理）：模型路径（.pt/.onnx），留空则关闭
+        # 本机模型仓库示例：F:\ai\models\yolo
+        ZLM_YOLO_MODEL_DIR=
+        # 只写文件名时到 ZLM_YOLO_MODEL_DIR 下找；相对路径按 exe 目录解析
         ZLM_YOLO_MODEL=
+        # 预留：外部推理服务地址（当前走本地 SimdYolo，不使用）
         ZLM_YOLO_ENDPOINT=
+        # 推理设备：cpu / vulkan / metal / auto
+        ZLM_YOLO_DEVICE=cpu
+        # 置信度阈值 0~1 / 模型输入尺寸（.pt 要求 32 的倍数）/ CPU 线程（0=默认）
+        ZLM_YOLO_CONFIDENCE=0.25
+        ZLM_YOLO_INPUT_WIDTH=640
+        ZLM_YOLO_INPUT_HEIGHT=640
+        ZLM_YOLO_CPU_THREADS=0
+        # 同一路流两次检测的最小间隔（毫秒）；0 表示不限速
+        ZLM_YOLO_SAMPLE_INTERVAL_MS=1000
         """;
 }

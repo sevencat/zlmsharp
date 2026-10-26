@@ -39,6 +39,9 @@ public sealed class MediaSource : IDisposable
     /// <summary>流类型/业务类型，如 live、record（对应 URL 中的 schema）。</summary>
     public string Schema { get; }
 
+    /// <summary>创建时间，用于 API 展示存活时长。</summary>
+    public DateTime CreatedAt { get; } = DateTime.UtcNow;
+
     public MediaTrack Video { get; } = new(TrackType.Video);
 
     public MediaTrack Audio { get; } = new(TrackType.Audio);

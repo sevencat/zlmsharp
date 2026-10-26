@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ZlmSharp.Protocols.Flv</RootNamespace>
+    <AssemblyName>ZlmSharp.Protocols.Flv</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp.Core\ZlmSharp.Core.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Codecs\ZlmSharp.Codecs.csproj" />
+  </ItemGroup>
+
+</Project>

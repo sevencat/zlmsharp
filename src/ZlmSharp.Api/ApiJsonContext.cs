@@ -7,6 +7,10 @@ namespace ZlmSharp.Api;
 [JsonSerializable(typeof(ApiVersionResponse))]
 [JsonSerializable(typeof(ApiListResponse))]
 [JsonSerializable(typeof(ApiErrorResponse))]
+[JsonSerializable(typeof(ApiMediaListResponse))]
+[JsonSerializable(typeof(ApiCloseStreamsResponse))]
+[JsonSerializable(typeof(ApiYoloDetectResponse))]
+[JsonSerializable(typeof(ApiYoloInfoResponse))]
 internal sealed partial class ApiJsonContext : JsonSerializerContext
 {
 }

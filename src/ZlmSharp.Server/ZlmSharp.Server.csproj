@@ -10,8 +10,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp.Ai\ZlmSharp.Ai.csproj" />
     <ProjectReference Include="..\ZlmSharp.Api\ZlmSharp.Api.csproj" />
     <ProjectReference Include="..\ZlmSharp.Configuration\ZlmSharp.Configuration.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Http\ZlmSharp.Http.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Protocols.Rtmp\ZlmSharp.Protocols.Rtmp.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Protocols.Rtsp\ZlmSharp.Protocols.Rtsp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

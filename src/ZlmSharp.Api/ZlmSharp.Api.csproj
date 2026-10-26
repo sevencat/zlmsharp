@@ -10,7 +10,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp.Ai\ZlmSharp.Ai.csproj" />
     <ProjectReference Include="..\ZlmSharp.Configuration\ZlmSharp.Configuration.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Core\ZlmSharp.Core.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Codecs\ZlmSharp.Codecs.csproj" />
   </ItemGroup>
 
 </Project>
