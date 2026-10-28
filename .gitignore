@@ -17,3 +17,4 @@ log/
 *.pdb
 /tests/ZlmSharp.Tests/TestResults
 .idea
+/web/package-lock.json
