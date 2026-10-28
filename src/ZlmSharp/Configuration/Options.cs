@@ -68,7 +68,7 @@ public sealed class HttpOptions
 
     public int SslPort { get; set; } = 443;
 
-    public string RootPath { get; set; } = "./www";
+    public string RootPath { get; set; } = "./WebUI";
 
     public string CharSet { get; set; } = "utf-8";
 

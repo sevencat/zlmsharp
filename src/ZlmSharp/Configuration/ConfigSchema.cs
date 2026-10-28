@@ -47,7 +47,7 @@ public static class ConfigSchema
 
         new("http", "port", ConfigValueKind.Int, "HTTP/API 端口"),
         new("http", "sslport", ConfigValueKind.Int, "HTTPS 端口"),
-        new("http", "rootPath", ConfigValueKind.String, "HTTP 根目录"),
+        new("http", "rootPath", ConfigValueKind.String, "内置管理页面目录（默认 ./WebUI）"),
         new("http", "charSet", ConfigValueKind.String, "默认字符集"),
         new("http", "keepAliveSecond", ConfigValueKind.Int, "keepalive 超时(秒)"),
         new("http", "maxReqSize", ConfigValueKind.Int, "最大请求头大小(字节)"),

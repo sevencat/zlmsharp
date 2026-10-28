@@ -21,11 +21,29 @@
     <InternalsVisibleTo Include="ZlmSharp.Tests" />
   </ItemGroup>
 
+  <!--
+    内置管理页面（单文件 html）：不再内嵌进程序集，构建/发布时拷到输出目录 WebUI/，
+    运行期由 AdminPageEndpoints 从磁盘读取（http.rootPath 默认 ./WebUI，可覆盖以便热替换）。
+    产物由 web/ 工程生成：`npm run build` 会把 dist/index.html 写回这里，并预生成 .br/.gz。
+  -->
   <ItemGroup>
-    <!-- 内置管理页面（零前端构建）；http.rootPath 下的同名文件可覆盖 -->
-    <EmbeddedResource Include="WebUI\index.html" LogicalName="ZlmSharp.WebUI.index.html" />
-    <EmbeddedResource Include="WebUI\app.js" LogicalName="ZlmSharp.WebUI.app.js" />
-    <EmbeddedResource Include="WebUI\style.css" LogicalName="ZlmSharp.WebUI.style.css" />
+    <None Remove="WebUI\index.html" />
+    <Content Include="WebUI\index.html" Link="WebUI\index.html"
+             Condition="Exists('WebUI\index.html')"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+
+    <None Remove="WebUI\index.html.br" Condition="Exists('WebUI\index.html.br')" />
+    <Content Include="WebUI\index.html.br" Link="WebUI\index.html.br"
+             Condition="Exists('WebUI\index.html.br')"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+
+    <None Remove="WebUI\index.html.gz" Condition="Exists('WebUI\index.html.gz')" />
+    <Content Include="WebUI\index.html.gz" Link="WebUI\index.html.gz"
+             Condition="Exists('WebUI\index.html.gz')"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

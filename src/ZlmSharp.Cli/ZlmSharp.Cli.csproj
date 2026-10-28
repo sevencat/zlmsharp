@@ -31,6 +31,23 @@
     <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
   </ItemGroup>
 
+  <!-- 内置管理页面（单文件 html，由 web/ 工程构建）：库项目的 Content 不会传递到引用方，
+       所以在这里显式拷贝，产物目录/发布目录下会多一个 WebUI/（对应 http.rootPath 默认值）。 -->
+  <ItemGroup>
+    <Content Include="..\ZlmSharp\WebUI\index.html" Link="WebUI\index.html"
+             Condition="Exists('..\ZlmSharp\WebUI\index.html')"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\ZlmSharp\WebUI\index.html.br" Link="WebUI\index.html.br"
+             Condition="Exists('..\ZlmSharp\WebUI\index.html.br')"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\ZlmSharp\WebUI\index.html.gz" Link="WebUI\index.html.gz"
+             Condition="Exists('..\ZlmSharp\WebUI\index.html.gz')"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- NLog 大量使用反射（布局渲染器/目标工厂），NativeAOT 下整体保留，避免运行期丢失类型 -->
   <ItemGroup>
     <TrimmerRootAssembly Include="NLog" />

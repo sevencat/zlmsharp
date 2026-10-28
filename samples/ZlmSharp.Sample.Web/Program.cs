@@ -13,9 +13,10 @@ builder.Services.AddZlmSharp(options =>
 
 var app = builder.Build();
 
-app.MapGet("/", () => "hello from host app");
+// 注意：不要占用 "/"，那是 zlmsharp 内置管理页面的路由。
+app.MapGet("/hello", () => "hello from host app");
 
-// 挂载 zlmsharp 的 /index/api/*、后续的 HTTP-FLV/WS-FLV 端点
+// 挂载 zlmsharp 的 /index/api/*、HTTP-FLV/WS-FLV 端点与内置管理页面
 app.UseZlmSharp();
 
 app.Run("http://127.0.0.1:5180");

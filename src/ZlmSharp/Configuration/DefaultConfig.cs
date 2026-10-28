@@ -42,7 +42,7 @@ public static class DefaultConfig
         [http]
         port=8080
         sslport=443
-        rootPath=./www
+        rootPath=./WebUI
         charSet=utf-8
         keepAliveSecond=30
         maxReqSize=40960

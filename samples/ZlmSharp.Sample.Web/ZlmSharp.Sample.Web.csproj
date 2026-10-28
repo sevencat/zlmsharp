@@ -12,4 +12,17 @@
     <ProjectReference Include="..\..\src\ZlmSharp\ZlmSharp.csproj" />
   </ItemGroup>
 
+  <!-- 管理页面（单文件 html）：库项目的 Content 不会传递到引用方，这里显式带上 WebUI/ -->
+  <ItemGroup>
+    <Content Include="..\..\src\ZlmSharp\WebUI\index.html" Link="WebUI\index.html"
+             Condition="Exists('..\..\src\ZlmSharp\WebUI\index.html')"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\ZlmSharp\WebUI\index.html.br" Link="WebUI\index.html.br"
+             Condition="Exists('..\..\src\ZlmSharp\WebUI\index.html.br')"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\ZlmSharp\WebUI\index.html.gz" Link="WebUI\index.html.gz"
+             Condition="Exists('..\..\src\ZlmSharp\WebUI\index.html.gz')"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
