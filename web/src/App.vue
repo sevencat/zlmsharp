@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { navItems } from './router'
 import { auth, clearLogs, logs, saveSecret } from './api'
+import { appIconUrl } from './branding'
 import { refresh, state, startPolling, stopPolling } from './store'
 import AppIcon from './components/AppIcon.vue'
 
@@ -33,7 +34,7 @@ onBeforeUnmount(() => stopPolling())
   <div class="app-shell">
     <aside class="app-side">
       <div class="brand">
-        <span class="mark"><AppIcon icon="video" size="small" /></span>
+        <img class="brand-logo" :src="appIconUrl" alt="zlmsharp" />
         <span>zlmsharp</span>
       </div>
 

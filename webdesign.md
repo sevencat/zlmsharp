@@ -125,6 +125,13 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 - 自定义组件收到的 props 形态：`icon` 是 `['mdi', 'mdi-play']`（数组），`size` 是 `'mdi-24px'` / `'mdi-36px'` / `'mdi-48px'` 或 `null`，颜色通过外层 `span.icon` 的 `has-text-*` 类经 `currentColor` 继承。
 - 未在 `icons.ts` 登记的图标名会渲染成虚线圈，便于一眼发现漏配。新增图标：在 `icons.ts` 里 import 并加入映射表即可。
 
+### 4.2.1 品牌图标与 favicon（内联 PNG）
+
+- 源图是仓库根的 `assets/app-icon.png`（512×512）。`scripts/build-web.ps1` 在构建前用 `System.Drawing` 缩成 128×128 写到 `web/src/assets/app-icon.png`（仅当源图更新时才重新生成）。
+- `src/branding.ts` 里 `import appIcon from './assets/app-icon.png'`，配合 `build.assetsInlineLimit: Infinity`，Vite 直接把它变成 base64 `data:` URI —— **产物里没有图片文件，浏览器也没有额外请求**。
+- 侧边栏品牌位（`App.vue` 的 `.brand-logo`）与 favicon（`main.ts` 注入 `<link rel="icon">`）复用同一个 data URI，因此 PNG 只内联一份。
+- 换图标只需替换 `assets/app-icon.png` 后重新构建，无需改代码。
+
 ### 4.3 鉴权
 - 后端 `AuthorizeAsync` **只从 query 读 `secret`**，不支持自定义 header；回环地址（127.0.0.1/::1）免校验。
 - 前端存在 `localStorage['zlmsharp.secret']`，`api.ts` 自动拼到每个请求。
@@ -174,10 +181,12 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 
 | 指标 | 数值 |
 |---|---|
-| `index.html`（未压缩） | 1,611,365 B ≈ **1.54 MB** |
-| `index.html.br`（质量 11） | 221,923 B ≈ **217 KB** |
-| `index.html.gz`（等级 9） | 292,525 B ≈ **286 KB** |
-| 构建耗时 | ≈ 2.5 s（55 modules） |
+| `index.html`（未压缩） | 1,652,220 B ≈ **1.58 MB** |
+| `index.html.br`（质量 11） | 252,580 B ≈ **247 KB** |
+| `index.html.gz`（等级 9） | 324,757 B ≈ **317 KB** |
+| 构建耗时 | ≈ 2.6 s（56 modules） |
+
+> 其中品牌图标（128×128 PNG，base64 约 40 KB）贡献了约 30 KB 的 Brotli 体积；若需进一步瘦身，可把 `web/src/assets/app-icon.png` 缩到 64×64。
 
 - 首屏传输走 Brotli ≈ 216 KB；二次打开走 `304`，约 0 字节。
 - 体积主要来自：Buefy 全量注册（含 Bulma 样式）、`mpegts.js`、Vue runtime。

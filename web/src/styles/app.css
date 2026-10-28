@@ -56,14 +56,13 @@ body {
   letter-spacing: 0.5px;
 }
 
-.app-side .brand .mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--side-active);
+.app-side .brand .brand-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  object-fit: cover;
+  /* 深色侧边栏上给图标一圈浅色描边，避免深蓝底融进背景 */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
 
 .app-side nav {

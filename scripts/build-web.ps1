@@ -29,6 +29,38 @@ if (-not (Test-Path $webRoot)) {
     throw "找不到前端工程目录：$webRoot"
 }
 
+# 品牌图标：assets/app-icon.png（512x512）→ web/src/assets/app-icon.png（128x128，内联用）
+# 只在源图更新过时才重新生成，避免每次构建都做一次图像缩放。
+$sourceIcon = Join-Path $repoRoot 'assets/app-icon.png'
+$derivedIcon = Join-Path $webRoot 'src/assets/app-icon.png'
+if ((Test-Path $sourceIcon) -and (
+        -not (Test-Path $derivedIcon) -or
+        (Get-Item $sourceIcon).LastWriteTimeUtc -gt (Get-Item $derivedIcon).LastWriteTimeUtc)) {
+    Write-Host '==> 同步品牌图标 assets/app-icon.png → 128x128' -ForegroundColor Cyan
+    Add-Type -AssemblyName System.Drawing
+    $size = 128
+    $image = [System.Drawing.Image]::FromFile($sourceIcon)
+    try {
+        $bitmap = New-Object System.Drawing.Bitmap $size, $size
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $graphics.DrawImage($image, 0, 0, $size, $size)
+        }
+        finally {
+            $graphics.Dispose()
+        }
+
+        New-Item -ItemType Directory -Force -Path (Split-Path $derivedIcon) | Out-Null
+        $bitmap.Save($derivedIcon, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bitmap.Dispose()
+    }
+    finally {
+        $image.Dispose()
+    }
+}
+
 Push-Location $webRoot
 try {
     if (-not $SkipInstall) {

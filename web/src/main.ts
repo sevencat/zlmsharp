@@ -6,6 +6,14 @@ import './styles/app.css'
 import App from './App.vue'
 import router from './router'
 import MdiIcon from './components/MdiIcon.vue'
+import { appIconUrl } from './branding'
+
+// 单文件页面：favicon 用内联 data URI，避免任何外部请求
+const favicon = document.createElement('link')
+favicon.rel = 'icon'
+favicon.type = 'image/png'
+favicon.href = appIconUrl
+document.head.appendChild(favicon)
 
 const app = createApp(App)
 
