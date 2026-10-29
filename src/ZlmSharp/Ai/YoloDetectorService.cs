@@ -1,22 +1,26 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
-using SimdYolo;
 
 namespace ZlmSharp.Ai;
 
 /// <summary>
-/// SimdYolo 推理会话的宿主：首次使用某个模型时才加载（懒加载），之后按模型路径缓存复用。
-/// SimdYolo 的会话不支持并发推理（重入会抛异常），所以这里用信号量把调用排队。
+/// 推理会话的宿主：首次使用某个模型时才加载（懒加载），之后按模型路径缓存复用。
+/// 后端会话不支持并发推理（重入会抛异常），所以这里用信号量把调用排队。
 /// </summary>
+/// <remarks>
+/// 实际推理引擎由 <see cref="IYoloBackendFactory"/> 注入；未注入时退化为
+/// <see cref="UnavailableYoloBackendFactory"/>，<see cref="BackendAvailable"/> 为 false。
+/// </remarks>
 public sealed class YoloDetectorService : IDisposable
 {
     private static readonly string[] ModelExtensions = [".onnx", ".pt", ".pth", ".sytrain"];
 
     private readonly YoloOptions _options;
+    private readonly IYoloBackendFactory _backendFactory;
     private readonly ILogger? _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _stateLock = new();
-    private readonly Dictionary<string, YoloDetector> _detectors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IYoloInferenceBackend> _detectors = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Exception> _loadErrors = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, YoloModelSummary> _summaries = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _usage = [];
@@ -24,10 +28,14 @@ public sealed class YoloDetectorService : IDisposable
     private string[]? _availableModels;
     private bool _disposed;
 
-    public YoloDetectorService(YoloOptions options, ILogger? logger = null)
+    public YoloDetectorService(
+        YoloOptions options,
+        IYoloBackendFactory? backendFactory = null,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options;
+        _backendFactory = backendFactory ?? UnavailableYoloBackendFactory.Instance;
         _logger = logger;
     }
 
@@ -35,6 +43,12 @@ public sealed class YoloDetectorService : IDisposable
 
     /// <summary>是否配置了默认模型（配置了模型目录但没指定默认模型时为 false，仍可用 <c>model=</c> 指定）。</summary>
     public bool Enabled => _options.ModelPath.Length > 0;
+
+    /// <summary>当前构建是否接入了推理后端；false 时即便配置了模型也无法推理。</summary>
+    public bool BackendAvailable => _backendFactory.IsAvailable;
+
+    /// <summary>推理后端名（未接入时为 <c>unavailable</c>）。</summary>
+    public string BackendName => _backendFactory.Name;
 
     /// <summary>默认模型绝对路径。</summary>
     public string ModelPath => _options.ModelPath;
@@ -150,19 +164,9 @@ public sealed class YoloDetectorService : IDisposable
 
             try
             {
-                if (confidence is { } value)
+                foreach (var box in detector.Detect(image, confidence))
                 {
-                    foreach (var instance in detector.Predict(image.Pixels, image.Width, image.Height, value, false, image.Stride))
-                    {
-                        objects.Add(ToObject(instance.Box, names));
-                    }
-                }
-                else
-                {
-                    foreach (var box in detector.Detect(image.Pixels, image.Width, image.Height, false, image.Stride))
-                    {
-                        objects.Add(ToObject(box, names));
-                    }
+                    objects.Add(ToObject(box, names));
                 }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -203,19 +207,19 @@ public sealed class YoloDetectorService : IDisposable
             }
         }
 
-        YoloModelSummary summary;
+        YoloModelSummary? summary;
         try
         {
-            var info = ModelInfo.Read(path);
-            summary = new YoloModelSummary(
-                $"{info.Format}",
-                $"{info.Task}",
-                info.ClassCount,
-                info.ClassNames.OrderBy(pair => pair.Key).Select(pair => pair.Value).ToArray());
+            summary = _backendFactory.ReadModelInfo(path);
         }
         catch (Exception exception)
         {
             _logger?.LogWarning(exception, "读取 YOLO 模型元信息失败: {Model}", path);
+            return null;
+        }
+
+        if (summary is null)
+        {
             return null;
         }
 
@@ -255,7 +259,7 @@ public sealed class YoloDetectorService : IDisposable
     }
 
     /// <summary>调用方必须持有 <see cref="_gate"/>。</summary>
-    private async Task<YoloDetector> GetOrLoadAsync(string modelPath, CancellationToken cancellationToken)
+    private async Task<IYoloInferenceBackend> GetOrLoadAsync(string modelPath, CancellationToken cancellationToken)
     {
         lock (_stateLock)
         {
@@ -271,19 +275,20 @@ public sealed class YoloDetectorService : IDisposable
             }
         }
 
-        var detectorOptions = BuildDetectorOptions();
+        var backendOptions = BuildBackendOptions();
         _logger?.LogInformation(
-            "加载 YOLO 模型 {Model}（device={Device}, input={Width}x{Height}）",
+            "加载 YOLO 模型 {Model}（backend={Backend}, device={Device}, input={Width}x{Height}）",
             modelPath,
-            detectorOptions.Device,
-            detectorOptions.Width,
-            detectorOptions.Height);
+            _backendFactory.Name,
+            backendOptions.Device,
+            backendOptions.InputWidth,
+            backendOptions.InputHeight);
 
-        YoloDetector detector;
+        IYoloInferenceBackend detector;
         try
         {
             detector = await Task.Run(
-                () => new YoloDetector(modelPath, detectorOptions),
+                () => _backendFactory.Load(modelPath, backendOptions),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -301,7 +306,7 @@ public sealed class YoloDetectorService : IDisposable
             "YOLO 模型加载完成 {Model}：类别数 {Count}，后端 {Backend}",
             Path.GetFileName(modelPath),
             detector.ClassNames.Count,
-            detector.BackendName);
+            detector.Name);
 
         lock (_stateLock)
         {
@@ -365,24 +370,16 @@ public sealed class YoloDetectorService : IDisposable
         return ModelExtensions.Any(item => string.Equals(item, extension, StringComparison.OrdinalIgnoreCase));
     }
 
-    private DetectorOptions BuildDetectorOptions() => new()
+    private YoloBackendOptions BuildBackendOptions() => new()
     {
-        Device = ParseDevice(_options.Device),
-        Width = _options.InputWidth,
-        Height = _options.InputHeight,
+        Device = _options.Device,
+        InputWidth = _options.InputWidth,
+        InputHeight = _options.InputHeight,
         Confidence = _options.Confidence,
         CpuThreads = _options.CpuThreads,
     };
 
-    private static ComputeDevice ParseDevice(string device) => device.Trim().ToLowerInvariant() switch
-    {
-        "vulkan" or "gpu" => ComputeDevice.Vulkan,
-        "metal" => ComputeDevice.Metal,
-        "auto" => ComputeDevice.Auto,
-        _ => ComputeDevice.Cpu,
-    };
-
-    private static YoloObject ToObject(Detection box, IReadOnlyDictionary<int, string> names) => new(
+    private static YoloObject ToObject(YoloRawDetection box, IReadOnlyDictionary<int, string> names) => new(
         box.ClassId,
         names.TryGetValue(box.ClassId, out var name) ? name : string.Empty,
         box.Confidence,

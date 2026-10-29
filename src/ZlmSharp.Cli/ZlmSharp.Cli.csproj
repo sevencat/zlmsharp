@@ -18,9 +18,6 @@
     <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
     <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
 
-    <!-- SimdYolo 未声明 AOT/裁剪兼容（见下方 TrimmerRootAssembly 注释）。
-         IL2104/IL3053 是「该程序集有 N 条告警」的汇总码，仅这两条放行，其他 AOT 告警仍按错误处理。 -->
-    <NoWarn>$(NoWarn);IL2104;IL3053</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -52,13 +49,6 @@
   <ItemGroup>
     <TrimmerRootAssembly Include="NLog" />
     <TrimmerRootAssembly Include="NLog.Extensions.Logging" />
-  </ItemGroup>
-
-  <!-- SimdYolo（本地 .nupkg，纯托管推理）未声明 AOT/裁剪兼容：整体保留其成员，
-       否则 ILC 会因该程序集产生 IL2104/IL3053，被 TreatWarningsAsErrors 升级为错误。
-       IL2104/IL3053 是「该程序集有 N 条告警」的汇总码，保留成员后仍需按码放行。 -->
-  <ItemGroup>
-    <TrimmerRootAssembly Include="SimdYolo" />
   </ItemGroup>
 
   <!-- 发布目录保持干净：只留 zlmsharp.exe（首次运行自动生成 zlmsharp.ini）。

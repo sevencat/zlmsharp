@@ -2,7 +2,7 @@
 
 <img src="assets/app-icon.png" width="96" align="right" alt="zlmsharp" />
 
-A C#/.NET 10 port of the [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit) streaming core: ingest, media source fan-out, protocol conversion and a ZLM-compatible HTTP API — as a single small binary plus one class library.
+A C#/.NET 8 port of the [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit) streaming core: ingest, media source fan-out, protocol conversion and a ZLM-compatible HTTP API — as a single small binary plus one class library.
 
 **English** | [简体中文](README.cn.md)
 
@@ -17,7 +17,7 @@ A C#/.NET 10 port of the [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit) 
 
 ## Quick start
 
-Requirements: .NET 10 SDK (`global.json` pins `10.0.x`).
+Requirements: .NET 8 SDK or later (`TargetFramework` is `net8.0`, `global.json` requires at least `8.0.100`).
 
 ```bash
 git clone <repo> zlmsharp && cd zlmsharp
@@ -25,7 +25,7 @@ dotnet build zlmsharp.sln
 dotnet run --project src/ZlmSharp.Cli
 ```
 
-First start writes `zlmsharp.ini` and `.env` next to the executable (`src/ZlmSharp.Cli/bin/Debug/net10.0/`), then listens on:
+First start writes `zlmsharp.ini` and `.env` next to the executable (`src/ZlmSharp.Cli/bin/Debug/net8.0/`), then listens on:
 
 | Service | Default port | Notes |
 | --- | --- | --- |

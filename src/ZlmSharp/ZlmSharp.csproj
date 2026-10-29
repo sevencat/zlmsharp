@@ -11,8 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 纯托管 YOLO 推理（未上架 nuget.org，见仓库根 nuget.config 的本地源） -->
-    <PackageReference Include="SimdYolo" Version="0.11.2" />
+    <!-- 推理引擎不在此引用：核心库只定义 IYoloBackendFactory，具体适配器作为独立项目接入 -->
     <PackageReference Include="NLog" Version="6.2.2" />
     <PackageReference Include="NLog.Extensions.Logging" Version="6.2.2" />
   </ItemGroup>

@@ -1,6 +1,6 @@
 namespace ZlmSharp.Ai;
 
-/// <summary>已解码的 RGB24 图像，即 SimdYolo 的推理输入（按行排列、可带行跨度）。</summary>
+/// <summary>已解码的 RGB24 图像，即推理后端的输入（按行排列、可带行跨度）。</summary>
 public sealed class RgbImage
 {
     public RgbImage(byte[] pixels, int width, int height, int stride = 0)

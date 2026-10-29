@@ -56,6 +56,14 @@ internal sealed class StreamYoloMonitor : BackgroundService
             return;
         }
 
+        if (!_detector.BackendAvailable)
+        {
+            _logger.LogWarning(
+                "YOLO 定时检测已跳过：当前构建未接入推理后端（backend={Backend}），已配置的模型不会生效",
+                _detector.BackendName);
+            return;
+        }
+
         if (_options.Http.Port <= 0)
         {
             _logger.LogWarning("YOLO 定时检测需要本机 HTTP 端口（HTTP-FLV 抽帧），当前 http.port=0，已跳过");

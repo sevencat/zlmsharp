@@ -2,7 +2,7 @@
 
 <img src="assets/app-icon.png" width="96" align="right" alt="zlmsharp" />
 
-用 C#/.NET 10 复刻 [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit) 的流媒体核心：推流接入、媒体源分发、协议转换，以及一套与 ZLM 兼容的 HTTP API —— 一个单文件可执行程序 + 一个类库。
+用 C#/.NET 8 复刻 [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit) 的流媒体核心：推流接入、媒体源分发、协议转换，以及一套与 ZLM 兼容的 HTTP API —— 一个单文件可执行程序 + 一个类库。
 
 [English](README.md) | **简体中文**
 
@@ -17,7 +17,7 @@
 
 ## 快速开始
 
-需要 .NET 10 SDK（`global.json` 钉住 `10.0.x`）。
+目标框架为 `net8.0`，需要 .NET 8 SDK 或更高（`global.json` 要求不低于 `8.0.100`）。
 
 ```bash
 git clone <repo> zlmsharp && cd zlmsharp
@@ -25,7 +25,7 @@ dotnet build zlmsharp.sln
 dotnet run --project src/ZlmSharp.Cli
 ```
 
-首次启动会在 exe 同目录（`src/ZlmSharp.Cli/bin/Debug/net10.0/`）生成 `zlmsharp.ini` 与 `.env`，然后监听：
+首次启动会在 exe 同目录（`src/ZlmSharp.Cli/bin/Debug/net8.0/`）生成 `zlmsharp.ini` 与 `.env`，然后监听：
 
 | 服务 | 默认端口 | 说明 |
 | --- | --- | --- |

@@ -18,3 +18,4 @@ log/
 /tests/ZlmSharp.Tests/TestResults
 .idea
 /web/package-lock.json
+/simdyolo

@@ -244,9 +244,10 @@ public sealed class RtmpSession
         var windowSize = (uint)Math.Max(0, _options.AcknowledgementWindow);
         if (windowSize > 0)
         {
-            Span<byte> payload = stackalloc byte[4];
+            // 用数组而非 stackalloc：C# 12 及以下不允许在 async 方法里用 ref struct
+            var payload = new byte[4];
             BinaryPrimitives.WriteUInt32BigEndian(payload, windowSize);
-            await SendAsync(RtmpMessageType.WindowAcknowledgementSize, payload.ToArray(), 0, 2, cancellationToken)
+            await SendAsync(RtmpMessageType.WindowAcknowledgementSize, payload, 0, 2, cancellationToken)
                 .ConfigureAwait(false);
 
             var bandwidth = new byte[5];

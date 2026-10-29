@@ -308,7 +308,8 @@ public static class RtmpPullClient
         long bytesRead,
         CancellationToken cancellationToken)
     {
-        Span<byte> payload = stackalloc byte[4];
+        // 用数组而非 stackalloc：C# 12 及以下不允许在 async 方法里用 ref struct
+        var payload = new byte[4];
         BinaryPrimitives.WriteUInt32BigEndian(payload, (uint)bytesRead);
         var bytes = writer.BuildMessage(RtmpMessageType.Acknowledgement, 0, 0, payload, 2);
         await network.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
