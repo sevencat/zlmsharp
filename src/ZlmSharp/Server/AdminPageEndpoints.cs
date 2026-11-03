@@ -1,16 +1,18 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using ZlmSharp.Configuration;
 
 namespace ZlmSharp.Server;
 
 /// <summary>
 /// 内置管理页面：挂在 <c>/zlm/admin</c> 下，<c>GET /zlm/admin</c>（等价 <c>/zlm/admin/</c>）返回单文件 <c>index.html</c>
 /// （前端由 web/ 工程构建：Vue 3 + Buefy + singlefile）。
-/// 页面不强绑程序集，统一从 <c>http.rootPath</c>（默认 <c>./WebUI</c>，相对可执行文件目录解析）读取，
-/// 若同目录存在构建期预压缩的 <c>index.html.br</c> / <c>index.html.gz</c>，按 <c>Accept-Encoding</c> 协商返回；
-/// 并支持 <c>ETag</c> + <c>If-None-Match</c>，重复打开页面只回 304。
+/// <para>
+/// 页面以<b>预压缩资源</b>形式内嵌在程序集里（<c>index.html.br</c> / <c>index.html.gz</c>），
+/// 部署时不需要随 exe 附带 WebUI 目录；按 <c>Accept-Encoding</c> 协商选择 brotli 或 gzip，
+/// 两者都不支持时返回 406（现代浏览器均支持，未压缩原文不再提供，省掉一半体积）。
+/// </para>
+/// 支持 <c>ETag</c> + <c>If-None-Match</c>，重复打开页面只回 304。
 /// 不占用 <c>/</c>（留给宿主），也不会与 <c>/index/api/*</c>、HTTP-FLV 的 catch-all 冲突。
 /// </summary>
 internal static class AdminPageEndpoints
@@ -20,46 +22,51 @@ internal static class AdminPageEndpoints
 
     private const string FileName = "index.html";
 
-    /// <summary>页面所在目录（相对可执行文件目录），对应 <c>http.rootPath</c> 的默认值。</summary>
-    private const string DefaultFolder = "WebUI";
+    /// <summary>内嵌资源名（与 ZlmSharp.csproj 的 LogicalName 一致）。</summary>
+    private const string BrotliResource = "ZlmSharp.WebUI.index.html.br";
+
+    private const string GzipResource = "ZlmSharp.WebUI.index.html.gz";
 
     private const string ContentType = "text/html; charset=utf-8";
 
-    public static void Map(IEndpointRouteBuilder endpoints, AppOptions options)
+    public static void Map(IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet(RoutePrefix, (RequestDelegate)(context => ServeAsync(context, options)));
+        endpoints.MapGet(RoutePrefix, (RequestDelegate)ServeAsync);
         endpoints.MapGet(RoutePrefix + "/{file}", (RequestDelegate)(context =>
             string.Equals(context.Request.RouteValues["file"]?.ToString(), FileName, StringComparison.OrdinalIgnoreCase)
-                ? ServeAsync(context, options)
+                ? ServeAsync(context)
                 : NotFoundAsync(context, "not found")));
     }
 
-    private static async Task ServeAsync(HttpContext context, AppOptions options)
+    private static async Task ServeAsync(HttpContext context)
     {
-        var root = ResolveRoot(options.Http.RootPath);
-        var source = Path.Combine(root, FileName);
-        if (!File.Exists(source))
-        {
-            // 仅兼容旧默认值：老版本 ini 是 rootPath=./www，该目录废弃后回退到程序目录下的 WebUI/
-            var fallback = Path.Combine(AppContext.BaseDirectory, DefaultFolder, FileName);
-            if (!IsLegacyRoot(root) || !File.Exists(fallback))
-            {
-                await NotFoundAsync(
-                    context,
-                    $"管理页面不存在：{source}{Environment.NewLine}"
-                    + $"把前端构建产物 index.html 放到该目录，或用 http.rootPath 指向其它目录（默认 ./{DefaultFolder}）。")
-                    .ConfigureAwait(false);
-                return;
-            }
+        var assembly = typeof(AdminPageEndpoints).Assembly;
+        var accept = context.Request.Headers.AcceptEncoding.ToString();
 
-            source = fallback;
+        var (resourceName, encoding) = PickResource(assembly, accept);
+        if (resourceName is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status406NotAcceptable;
+            context.Response.ContentType = "text/plain; charset=utf-8";
+            await context.Response.WriteAsync(
+                    "管理页面只提供 brotli / gzip 预压缩版本，请使用支持 Accept-Encoding: br 或 gzip 的浏览器访问。")
+                .ConfigureAwait(false);
+            return;
         }
 
-        var (path, encoding) = PickVariant(context, source);
-        var info = new FileInfo(path);
-        var suffix = encoding is null ? string.Empty : "-" + encoding;
-        var etag = $"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}{suffix}\"";
+        using var resource = assembly.GetManifestResourceStream(resourceName);
+        if (resource is null)
+        {
+            await NotFoundAsync(
+                    context,
+                    $"管理页面资源缺失：{resourceName}{Environment.NewLine}"
+                    + "请先在 web/ 目录执行 npm run build（会把 index.html.br / .gz 写回 src/ZlmSharp/WebUI/）。")
+                .ConfigureAwait(false);
+            return;
+        }
 
+        // 嵌入资源没有文件时间戳：用程序集 MVID（每次构建都会变）参与 ETag
+        var etag = $"\"{encoding}-{resource.Length:x}-{assembly.ManifestModule.ModuleVersionId:N}\"";
         context.Response.Headers.CacheControl = "no-cache";
         context.Response.Headers.ETag = etag;
 
@@ -72,51 +79,52 @@ internal static class AdminPageEndpoints
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = ContentType;
         context.Response.Headers.Vary = "Accept-Encoding";
-        if (encoding is not null)
-        {
-            context.Response.Headers.ContentEncoding = encoding;
-        }
+        context.Response.Headers.ContentEncoding = encoding;
 
-        // 直接走 sendfile，避免像旧实现那样每次请求都把整页读进内存
-        await context.Response.SendFileAsync(path, context.RequestAborted).ConfigureAwait(false);
+        await resource.CopyToAsync(context.Response.Body, context.RequestAborted).ConfigureAwait(false);
     }
 
-    /// <summary>挑选传输用的文件：优先 br，其次 gzip，都没有就用原文。</summary>
-    private static (string Path, string? Encoding) PickVariant(HttpContext context, string source)
+    /// <summary>挑选内嵌资源：优先 br，其次 gzip；都不可用返回 (null, null)。</summary>
+    private static (string? Resource, string? Encoding) PickResource(
+        System.Reflection.Assembly assembly,
+        string accept)
     {
-        var accept = context.Request.Headers.AcceptEncoding.ToString();
-        if (accept.Length > 0)
+        if (Accepts(accept, "br") && assembly.GetManifestResourceInfo(BrotliResource) is not null)
         {
-            if (Accepts(accept, "br") && File.Exists(source + ".br"))
-            {
-                return (source + ".br", "br");
-            }
-
-            if (Accepts(accept, "gzip") && File.Exists(source + ".gz"))
-            {
-                return (source + ".gz", "gzip");
-            }
+            return (BrotliResource, "br");
         }
 
-        return (source, null);
+        if (Accepts(accept, "gzip") && assembly.GetManifestResourceInfo(GzipResource) is not null)
+        {
+            return (GzipResource, "gzip");
+        }
+
+        return (null, null);
     }
 
-    /// <summary>极简 Accept-Encoding 解析：只判断某个编码是否被接受（<c>q=0</c> 视为拒绝）。</summary>
+    /// <summary>极简 Accept-Encoding 解析：只判断某个编码是否被接受（<c>q=0</c> 视为拒绝，<c>*</c> 视为接受非 br 的编码）。</summary>
     private static bool Accepts(string header, string coding)
     {
+        var wildcard = false;
+
         foreach (var item in header.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = item.IndexOf(';');
             var name = separator < 0 ? item : item[..separator].Trim();
-            if (!string.Equals(name, coding, StringComparison.OrdinalIgnoreCase))
+            var rejected = separator >= 0 && item[separator..].Contains("q=0", StringComparison.OrdinalIgnoreCase);
+
+            if (string.Equals(name, coding, StringComparison.OrdinalIgnoreCase))
             {
-                continue;
+                return !rejected;
             }
 
-            return separator < 0 || !item[separator..].Contains("q=0", StringComparison.OrdinalIgnoreCase);
+            if (name == "*" && !rejected)
+            {
+                wildcard = true;
+            }
         }
 
-        return false;
+        return wildcard;
     }
 
     private static bool IsNotModified(HttpContext context, string etag)
@@ -136,28 +144,6 @@ internal static class AdminPageEndpoints
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// 是否仍是旧版本的默认目录（<c>./www</c>）：只有这种配置才允许回退到 <c>WebUI/</c>，
-    /// 用户显式指向的其它目录（哪怕是空的）都不做隐式兜底。
-    /// </summary>
-    private static bool IsLegacyRoot(string root) =>
-        string.Equals(
-            Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "www")).TrimEnd(Path.DirectorySeparatorChar),
-            StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// 解析页面根目录：相对路径以可执行文件所在目录为基准（而不是进程 CWD，
-    /// 否则作为 Windows 服务 / 计划任务启动时会去 System32 找 ./WebUI）。
-    /// </summary>
-    private static string ResolveRoot(string rootPath)
-    {
-        var path = string.IsNullOrWhiteSpace(rootPath) ? "./" + DefaultFolder : rootPath;
-        return Path.IsPathRooted(path)
-            ? Path.GetFullPath(path)
-            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
     }
 
     private static Task NotFoundAsync(HttpContext context, string message)

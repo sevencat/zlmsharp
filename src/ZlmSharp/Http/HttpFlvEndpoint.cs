@@ -152,6 +152,7 @@ public static class HttpFlvEndpoint
         var cancellationToken = context.RequestAborted;
         PrepareResponse(context, options);
         var body = context.Response.BodyWriter;
+        var startedAt = DateTimeOffset.UtcNow;
 
         try
         {
@@ -169,11 +170,21 @@ public static class HttpFlvEndpoint
         }
         catch (OperationCanceledException)
         {
-            // 客户端断开
+            // 客户端主动断开：正常结束，但记录时长便于排查“播放器自己停掉”
+            logger.LogInformation(
+                "HTTP-FLV 客户端断开 {Url}（{Remote}，持续 {Seconds:F1}s）",
+                url,
+                context.Connection.RemoteIpAddress,
+                (DateTimeOffset.UtcNow - startedAt).TotalSeconds);
         }
         catch (IOException exception)
         {
-            logger.LogDebug(exception, "HTTP-FLV 连接中断 {Url}", url);
+            logger.LogInformation(
+                "HTTP-FLV 连接中断 {Url}（{Remote}，持续 {Seconds:F1}s）：{Message}",
+                url,
+                context.Connection.RemoteIpAddress,
+                (DateTimeOffset.UtcNow - startedAt).TotalSeconds,
+                exception.Message);
         }
     }
 
@@ -188,6 +199,7 @@ public static class HttpFlvEndpoint
     {
         using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
         logger.LogInformation("WS-FLV 开始播放 {Url}（{Remote}）", url, context.Connection.RemoteIpAddress);
+        var startedAt = DateTimeOffset.UtcNow;
 
         try
         {
@@ -205,14 +217,29 @@ public static class HttpFlvEndpoint
         }
         catch (OperationCanceledException)
         {
+            logger.LogInformation(
+                "WS-FLV 客户端断开 {Url}（{Remote}，持续 {Seconds:F1}s）",
+                url,
+                context.Connection.RemoteIpAddress,
+                (DateTimeOffset.UtcNow - startedAt).TotalSeconds);
         }
         catch (WebSocketException exception)
         {
-            logger.LogDebug(exception, "WS-FLV 连接中断 {Url}", url);
+            logger.LogInformation(
+                "WS-FLV 连接中断 {Url}（{Remote}，持续 {Seconds:F1}s）：{Message}",
+                url,
+                context.Connection.RemoteIpAddress,
+                (DateTimeOffset.UtcNow - startedAt).TotalSeconds,
+                exception.Message);
         }
         catch (IOException exception)
         {
-            logger.LogDebug(exception, "WS-FLV 连接中断 {Url}", url);
+            logger.LogInformation(
+                "WS-FLV 连接中断 {Url}（{Remote}，持续 {Seconds:F1}s）：{Message}",
+                url,
+                context.Connection.RemoteIpAddress,
+                (DateTimeOffset.UtcNow - startedAt).TotalSeconds,
+                exception.Message);
         }
         finally
         {

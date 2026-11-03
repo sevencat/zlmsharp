@@ -78,6 +78,11 @@ public sealed class RtmpSession
     private FlvMuxer? _playMuxer;
     private uint _playStreamId = RtmpConstants.DefaultStreamId;
 
+    private readonly DateTimeOffset _connectedAt = DateTimeOffset.UtcNow;
+    private long _playFrames;
+    private long _playBytes;
+    private long _sentBytes;
+
     public RtmpSession(
         Stream stream,
         MediaSourceRegistry registry,
@@ -139,18 +144,39 @@ public sealed class RtmpSession
         }
         catch (InvalidDataException exception)
         {
-            Log(RtmpLogLevel.Warning, $"RTMP 协议错误: {exception.Message}");
+            Log(RtmpLogLevel.Warning, $"RTMP 协议错误 {_key}（{RemoteText}）：{exception.Message}");
         }
         catch (IOException exception)
         {
-            Log(RtmpLogLevel.Debug, $"RTMP 连接中断: {exception.Message}");
+            // 对端直接关闭 TCP 是最常见的“播放器停了”原因，必须能从日志里看出来
+            Log(RtmpLogLevel.Info, $"RTMP 连接被对端断开 {_key}（{RemoteText}）：{exception.Message}");
         }
         finally
         {
             _lifetimeCts = null;
+            LogSessionClosed();
             CloseSource();
             await StopPlaybackAsync().ConfigureAwait(false);
         }
+    }
+
+    private string RemoteText => $"{_remoteIp ?? "-"}:{_remotePort}";
+
+    private void LogSessionClosed()
+    {
+        var role = _publishing
+            ? "推流"
+            : _playSession is not null || _playMuxer is not null || _playFrames > 0
+                ? "播放"
+                : "空闲";
+
+        var seconds = (DateTimeOffset.UtcNow - _connectedAt).TotalSeconds;
+
+        Log(
+            role == "空闲" ? RtmpLogLevel.Debug : RtmpLogLevel.Info,
+            $"RTMP 连接关闭（{role} {_key}，远端 {RemoteText}，存活 {seconds:F1}s，"
+            + $"播放 {Interlocked.Read(ref _playFrames)} 帧 / {Interlocked.Read(ref _playBytes) / 1024} KB，"
+            + $"总发出 {Interlocked.Read(ref _sentBytes) / 1024} KB）");
     }
 
     private async Task HandleMessageAsync(RtmpMessage message, CancellationToken cancellationToken)
@@ -383,6 +409,7 @@ public sealed class RtmpSession
         {
             await _stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
             await _stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Add(ref _sentBytes, bytes.Length);
         }
         finally
         {
@@ -702,15 +729,33 @@ public sealed class RtmpSession
         }
         catch (OperationCanceledException)
         {
+            Log(RtmpLogLevel.Info, $"RTMP 播放结束 {_key}（{RemoteText}）：本地主动停止，已发 {_playFrames} 帧");
         }
-        catch (IOException)
+        catch (IOException exception)
         {
+            Log(
+                RtmpLogLevel.Warning,
+                $"RTMP 播放写出失败 {_key}（{RemoteText}）：{exception.Message}；"
+                + $"已发 {Interlocked.Read(ref _playFrames)} 帧 / {Interlocked.Read(ref _playBytes) / 1024} KB");
         }
         catch (ObjectDisposedException)
         {
+            Log(RtmpLogLevel.Debug, $"RTMP 播放管道已释放 {_key}");
+        }
+        catch (Exception exception)
+        {
+            Log(RtmpLogLevel.Error, $"RTMP 播放异常 {_key}（{RemoteText}）：{exception}");
         }
         finally
         {
+            var dropped = sink.DroppedFrames;
+            if (dropped > 0)
+            {
+                Log(
+                    RtmpLogLevel.Warning,
+                    $"RTMP 播放 {_key}（{RemoteText}）队列丢帧 {dropped} 个，客户端消费过慢");
+            }
+
             sink.Dispose();
         }
     }
@@ -737,6 +782,9 @@ public sealed class RtmpSession
             6);
 
         await WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+
+        Interlocked.Increment(ref _playFrames);
+        Interlocked.Add(ref _playBytes, bytes.Length);
     }
 
     private async Task SendPlayAudioAsync(MediaFrame frame, CancellationToken cancellationToken)
@@ -760,6 +808,8 @@ public sealed class RtmpSession
             7);
 
         await WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+
+        Interlocked.Add(ref _playBytes, bytes.Length);
     }
 
     private async Task<MediaSource?> WaitForSourceAsync(
