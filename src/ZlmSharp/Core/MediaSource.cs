@@ -2,14 +2,21 @@ namespace ZlmSharp.Core;
 
 public sealed class MediaSourceOptions
 {
-    /// <summary>环形缓冲最多保留帧数。</summary>
-    public int MaxFrameCount { get; init; } = 1000;
+    /// <summary>环形缓冲最多保留帧数（音视频合计，含 AAC 小帧）。</summary>
+    public int MaxFrameCount { get; init; } = 2000;
 
-    /// <summary>环形缓冲按时间裁剪（毫秒），0 表示只按帧数裁剪。</summary>
-    public int MaxFrameMs { get; init; } = 5000;
+    /// <summary>
+    /// 环形缓冲按时间裁剪（毫秒），0 表示只按帧数裁剪。
+    /// 必须大于常见长 GOP：摄像机/云直播源的关键帧间隔可能到 8~10 秒，
+    /// 缓冲短于一个 GOP 会导致缓冲里找不到关键帧，新观众无法解码。
+    /// </summary>
+    public int MaxFrameMs { get; init; } = 15000;
 
-    /// <summary>每个观看者队列的帧数上限。</summary>
-    public int ReaderQueueCapacity { get; init; } = 128;
+    /// <summary>
+    /// 每个观看者队列的帧数上限。需容纳一个完整长 GOP 的全部音视频帧
+    /// （8 秒 @25fps 视频 200 帧 + AAC 48kHz 375 帧 ≈ 575），否则补发时就会丢帧。
+    /// </summary>
+    public int ReaderQueueCapacity { get; init; } = 1024;
 }
 
 /// <summary>
@@ -251,22 +258,26 @@ public sealed class MediaSource : IDisposable
                 }
             }
 
-            if (lastKeyIndex >= 0)
+            if (lastKeyIndex < 0)
             {
-                start = lastKeyIndex;
+                // 缓冲内没有关键帧（源 GOP 比环形缓冲还长）：宁可补发空，让观众等下一个关键帧，
+                // 也不要发一串没有参考帧的 P 帧——那会让播放器花屏/报 reference picture missing。
+                return result;
+            }
 
-                // 只把紧挨着关键帧的配置帧一起带上；更早的配置帧属于历史 GOP，不再补发
-                for (var index = lastKeyIndex - 1; index >= 0; index--)
+            start = lastKeyIndex;
+
+            // 只把紧挨着关键帧的配置帧一起带上；更早的配置帧属于历史 GOP，不再补发
+            for (var index = lastKeyIndex - 1; index >= 0; index--)
+            {
+                var frame = _ring[index];
+                if (frame.TrackType == TrackType.Video && frame.IsConfig)
                 {
-                    var frame = _ring[index];
-                    if (frame.TrackType == TrackType.Video && frame.IsConfig)
-                    {
-                        start = index;
-                        continue;
-                    }
-
-                    break;
+                    start = index;
+                    continue;
                 }
+
+                break;
             }
 
             for (var index = start; index < _ring.Count; index++)

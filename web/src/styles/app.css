@@ -258,6 +258,17 @@ table.table td.actions .button + .button {
   color: var(--muted);
 }
 
+.push-error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #fff5f7;
+  border: 1px solid #ffd0d9;
+  color: #cc0f35;
+  font-size: 12px;
+  word-break: break-all;
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;

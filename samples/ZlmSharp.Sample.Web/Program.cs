@@ -13,8 +13,8 @@ builder.Services.AddZlmSharp(options =>
 
 var app = builder.Build();
 
-// 注意：不要占用 "/"，那是 zlmsharp 内置管理页面的路由。
-app.MapGet("/hello", () => "hello from host app");
+// 内置管理页面挂在 /zlm/admin 下，根路径归宿主使用
+app.MapGet("/", () => "hello from host app");
 
 // 挂载 zlmsharp 的 /index/api/*、HTTP-FLV/WS-FLV 端点与内置管理页面
 app.UseZlmSharp();

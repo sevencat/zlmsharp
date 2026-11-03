@@ -9,8 +9,8 @@ namespace ZlmSharp.Http;
 internal delegate ValueTask FlvWriteHandler(ReadOnlyMemory<byte> data, CancellationToken cancellationToken);
 
 /// <summary>
-/// HTTP-FLV 与 WS-FLV 共用的分发循环：先发 FLV header / onMetaData / AVC sequence header，
-/// 再持续转发视频 tag。调用方负责捕获网络异常并记录日志。
+/// HTTP-FLV 与 WS-FLV 共用的分发循环：先发 FLV header / onMetaData / AVC sequence header /
+/// AAC sequence header，再持续转发音频与视频 tag。调用方负责捕获网络异常并记录日志。
 /// </summary>
 internal static class FlvLiveStream
 {
@@ -24,7 +24,17 @@ internal static class FlvLiveStream
         bool enhancedRtmp = false)
     {
         var sink = source.CreateReader();
-        var muxer = new FlvMuxer(config, metadata, enhancedRtmp: enhancedRtmp);
+
+        // 音频配置必须在构造 muxer 时就带上：AAC sequence header 通常只在推流开始时出现一次，
+        // 中途加入的观众拿不到，mpegts.js / flv.js 会因为没有解码配置而静音。
+        var muxer = new FlvMuxer(
+            config,
+            metadata,
+            source.Audio.AudioSpecificConfig ?? default,
+            source.Audio.SampleRate,
+            source.Audio.Channels,
+            enhancedRtmp);
+
         var tagBuffer = new ArrayBufferWriter<byte>(64 * 1024);
 
         long bytes = 0;
@@ -44,10 +54,31 @@ internal static class FlvLiveStream
             await write(configTag, cancellationToken).ConfigureAwait(false);
             bytes += configTag.Length;
 
+            var audioConfigTag = muxer.BuildAudioConfigTag();
+            if (audioConfigTag.Length > 0)
+            {
+                await write(audioConfigTag, cancellationToken).ConfigureAwait(false);
+                bytes += audioConfigTag.Length;
+            }
+
             await foreach (var frame in sink.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 try
                 {
+                    if (frame.TrackType == TrackType.Audio)
+                    {
+                        tagBuffer.Clear();
+                        var audioWritten = muxer.WriteAudioTag(frame, tagBuffer);
+                        if (audioWritten == 0)
+                        {
+                            continue;
+                        }
+
+                        await write(tagBuffer.WrittenMemory, cancellationToken).ConfigureAwait(false);
+                        bytes += audioWritten;
+                        continue;
+                    }
+
                     if (frame.TrackType != TrackType.Video)
                     {
                         continue;

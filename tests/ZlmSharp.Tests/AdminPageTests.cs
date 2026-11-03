@@ -18,6 +18,9 @@ public class AdminPageTests : IDisposable
 {
     private const string PageHtml = "<!DOCTYPE html><html><body>zlmsharp 控制台 8f3a</body></html>";
 
+    /// <summary>管理页面路由前缀（与 AdminPageEndpoints.RoutePrefix 对齐）。</summary>
+    private const string PagePath = "/zlm/admin/";
+
     private readonly string _root;
 
     public AdminPageTests()
@@ -46,7 +49,7 @@ public class AdminPageTests : IDisposable
         await using var _ = app;
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var response = await client.GetAsync($"{address}/");
+        using var response = await client.GetAsync($"{address}{PagePath}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
@@ -60,7 +63,7 @@ public class AdminPageTests : IDisposable
         await using var _ = app;
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var response = await client.GetAsync($"{address}/");
+        using var response = await client.GetAsync($"{address}{PagePath}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Contains("管理页面不存在", await response.Content.ReadAsStringAsync());
@@ -75,17 +78,17 @@ public class AdminPageTests : IDisposable
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
-        var (brStatus, brEncoding, brBody) = await GetAsync(client, $"{address}/", "br, gzip");
+        var (brStatus, brEncoding, brBody) = await GetAsync(client, $"{address}{PagePath}", "br, gzip");
         Assert.Equal(HttpStatusCode.OK, brStatus);
         Assert.Equal("br", brEncoding);
         Assert.Equal("br-body", brBody);
 
-        var (gzStatus, gzEncoding, gzBody) = await GetAsync(client, $"{address}/", "gzip");
+        var (gzStatus, gzEncoding, gzBody) = await GetAsync(client, $"{address}{PagePath}", "gzip");
         Assert.Equal(HttpStatusCode.OK, gzStatus);
         Assert.Equal("gzip", gzEncoding);
         Assert.Equal("gz-body", gzBody);
 
-        var (rawStatus, rawEncoding, rawBody) = await GetAsync(client, $"{address}/", null);
+        var (rawStatus, rawEncoding, rawBody) = await GetAsync(client, $"{address}{PagePath}", null);
         Assert.Equal(HttpStatusCode.OK, rawStatus);
         Assert.Null(rawEncoding);
         Assert.Contains("zlmsharp 控制台 8f3a", rawBody);
@@ -99,11 +102,11 @@ public class AdminPageTests : IDisposable
         await using var _ = app;
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var first = await client.GetAsync($"{address}/");
+        using var first = await client.GetAsync($"{address}{PagePath}");
         var etag = first.Headers.ETag?.Tag;
         Assert.False(string.IsNullOrEmpty(etag));
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{address}/");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{address}{PagePath}");
         request.Headers.TryAddWithoutValidation("If-None-Match", etag);
         using var second = await client.SendAsync(request);
 
@@ -129,7 +132,7 @@ public class AdminPageTests : IDisposable
             await using var _ = app;
 
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            using var response = await client.GetAsync($"{address}/");
+            using var response = await client.GetAsync($"{address}{PagePath}");
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
@@ -152,14 +155,15 @@ public class AdminPageTests : IDisposable
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
-        foreach (var path in new[] { "/admin", "/admin/index.html" })
+        // 带尾部斜杠（/zlm/admin/）、不带斜杠（/zlm/admin）与显式 index.html 都应命中
+        foreach (var path in new[] { "/zlm/admin", "/zlm/admin/", "/zlm/admin/index.html" })
         {
             using var response = await client.GetAsync($"{address}{path}");
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Contains("zlmsharp 控制台 8f3a", await response.Content.ReadAsStringAsync());
         }
 
-        using var missing = await client.GetAsync($"{address}/admin/app.js");
+        using var missing = await client.GetAsync($"{address}/zlm/admin/app.js");
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
     }
 
@@ -175,6 +179,13 @@ public class AdminPageTests : IDisposable
         var version = await client.GetAsync($"{address}/index/api/version");
         Assert.Equal(HttpStatusCode.OK, version.StatusCode);
         Assert.Contains("\"code\":0", await version.Content.ReadAsStringAsync());
+
+        // 管理页面已迁到 /zlm/admin：根路径与旧的 /admin 都不再占用
+        foreach (var path in new[] { "/", "/admin" })
+        {
+            using var legacy = await client.GetAsync($"{address}{path}");
+            Assert.Equal(HttpStatusCode.NotFound, legacy.StatusCode);
+        }
 
         // 未推流的 FLV 路径仍走 HTTP-FLV 端点（404 + 文本），不会被管理页面兜底成 HTML
         using var flv = await client.GetAsync($"{address}/live/missing.live.flv");

@@ -572,7 +572,10 @@ public sealed class RtmpSession
                 Height = source.Video.Height,
                 FrameRate = source.Video.Fps > 0 ? source.Video.Fps : 25,
             },
-            enhancedRtmp: _options.Enhanced);
+            source.Audio.AudioSpecificConfig ?? default,
+            source.Audio.SampleRate,
+            source.Audio.Channels,
+            _options.Enhanced);
 
         _playSource = source;
         _playMuxer = muxer;
@@ -598,6 +601,20 @@ public sealed class RtmpSession
                 6,
                 cancellationToken)
             .ConfigureAwait(false);
+
+        // 有音频时必须补发 AAC sequence header：它通常只在推流开始时出现一次，
+        // 中途加入的观众拿不到，播放器就会按 FLV 头的默认采样率解码，音画时钟逐渐漂移导致卡顿。
+        var audioConfigBody = muxer.BuildAudioConfigBody();
+        if (audioConfigBody.Length > 0)
+        {
+            await SendAsync(
+                    RtmpMessageType.Audio,
+                    audioConfigBody,
+                    _playStreamId,
+                    7,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         // CreateReader 会立刻把 GOP 快照塞进队列，保证秒开
         var sink = source.CreateReader();

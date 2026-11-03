@@ -6,14 +6,18 @@ using ZlmSharp.Configuration;
 namespace ZlmSharp.Server;
 
 /// <summary>
-/// 内置管理页面：<c>GET /</c> 返回单文件 <c>index.html</c>（前端由 web/ 工程构建：Vue 3 + Buefy + singlefile）。
+/// 内置管理页面：挂在 <c>/zlm/admin</c> 下，<c>GET /zlm/admin</c>（等价 <c>/zlm/admin/</c>）返回单文件 <c>index.html</c>
+/// （前端由 web/ 工程构建：Vue 3 + Buefy + singlefile）。
 /// 页面不强绑程序集，统一从 <c>http.rootPath</c>（默认 <c>./WebUI</c>，相对可执行文件目录解析）读取，
 /// 若同目录存在构建期预压缩的 <c>index.html.br</c> / <c>index.html.gz</c>，按 <c>Accept-Encoding</c> 协商返回；
 /// 并支持 <c>ETag</c> + <c>If-None-Match</c>，重复打开页面只回 304。
-/// 路由只占用 <c>/</c>、<c>/admin</c> 与 <c>/admin/index.html</c>，不会与 <c>/index/api/*</c>、HTTP-FLV 的 catch-all 冲突。
+/// 不占用 <c>/</c>（留给宿主），也不会与 <c>/index/api/*</c>、HTTP-FLV 的 catch-all 冲突。
 /// </summary>
 internal static class AdminPageEndpoints
 {
+    /// <summary>页面路由前缀；路由层对尾部斜杠宽容，<c>/zlm/admin</c> 与 <c>/zlm/admin/</c> 都能命中。</summary>
+    private const string RoutePrefix = "/zlm/admin";
+
     private const string FileName = "index.html";
 
     /// <summary>页面所在目录（相对可执行文件目录），对应 <c>http.rootPath</c> 的默认值。</summary>
@@ -23,9 +27,8 @@ internal static class AdminPageEndpoints
 
     public static void Map(IEndpointRouteBuilder endpoints, AppOptions options)
     {
-        endpoints.MapGet("/", (RequestDelegate)(context => ServeAsync(context, options)));
-        endpoints.MapGet("/admin", (RequestDelegate)(context => ServeAsync(context, options)));
-        endpoints.MapGet("/admin/{file}", (RequestDelegate)(context =>
+        endpoints.MapGet(RoutePrefix, (RequestDelegate)(context => ServeAsync(context, options)));
+        endpoints.MapGet(RoutePrefix + "/{file}", (RequestDelegate)(context =>
             string.Equals(context.Request.RouteValues["file"]?.ToString(), FileName, StringComparison.OrdinalIgnoreCase)
                 ? ServeAsync(context, options)
                 : NotFoundAsync(context, "not found")));

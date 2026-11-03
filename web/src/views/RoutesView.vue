@@ -14,6 +14,7 @@ interface ProxyRow {
 const proxies = ref<ProxyRow[]>([])
 const pushes = ref<PushState[]>([])
 const busy = ref('')
+const pushError = ref('')
 
 const proxyForm = reactive({ app: 'live', stream: '', url: '' })
 const pushForm = reactive({ app: 'live', stream: '', url: '' })
@@ -60,13 +61,15 @@ async function loadPushes() {
 async function addPush() {
   if (!pushForm.stream.trim() || !pushForm.url.trim()) return
   busy.value = 'addPush'
+  pushError.value = ''
   try {
     await call('startPush', { app: pushForm.app, stream: pushForm.stream, url: pushForm.url })
     pushForm.stream = ''
     pushForm.url = ''
     await loadPushes()
-  } catch {
-    // 同上
+  } catch (error) {
+    // 同时写入侧栏日志；这里额外留在表单下方，避免失败看起来“没反应”
+    pushError.value = error instanceof Error ? error.message : String(error)
   } finally {
     busy.value = ''
   }
@@ -149,6 +152,8 @@ onMounted(loadPushes)
         </b-button>
       </div>
 
+      <p v-if="pushError" class="push-error">{{ pushError }}</p>
+
       <div class="table-wrap" style="margin-top: 12px">
         <table class="table is-fullwidth">
           <thead><tr><th>流</th><th>目标</th><th>状态</th><th>帧数</th><th>运行时长</th><th>操作</th></tr></thead>
@@ -157,7 +162,16 @@ onMounted(loadPushes)
               <td class="mono">{{ item.app }}/{{ item.stream }}</td>
               <td class="mono">{{ item.url }}</td>
               <td>
-                <b-tag size="is-small" :type="item.state === 'pushing' ? 'is-success is-light' : 'is-warning is-light'">
+                <b-tag
+                  size="is-small"
+                  :type="
+                    item.state === 'running'
+                      ? 'is-success is-light'
+                      : item.state === 'failed'
+                        ? 'is-danger is-light'
+                        : 'is-warning is-light'
+                  "
+                >
                   {{ item.state }}
                 </b-tag>
                 <span v-if="item.error" class="muted"> {{ item.error }}</span>

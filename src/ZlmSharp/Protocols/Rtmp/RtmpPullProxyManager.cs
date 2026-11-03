@@ -128,7 +128,7 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
         var cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         var entry = new ProxyEntry(key, url, cts);
         _entries[key] = entry;
-        entry.Task = Task.Run(() => PullLoopAsync(source, uri, protocol, cts.Token), CancellationToken.None);
+        entry.Task = Task.Run(() => PullLoopAsync(key, schema, source, uri, protocol, cts.Token), CancellationToken.None);
 
         Log(RtmpLogLevel.Info, $"开始拉流代理 {key} ← {url}");
         return key;
@@ -212,6 +212,8 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
     }
 
     private async Task PullLoopAsync(
+        StreamKey key,
+        string schema,
         MediaSource source,
         Uri uri,
         PullProtocol protocol,
@@ -219,6 +221,14 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            // 流可能被外部关闭（close_streams / 无人观看回收）：必须换成新的 MediaSource，
+            // 否则重连后继续往已关闭的对象写帧，本地流永远不回来。
+            if (source.IsClosed)
+            {
+                source = _registry.GetOrCreate(key, schema, originType: "proxy");
+                Log(RtmpLogLevel.Info, $"代理流已被关闭，重建 {key}");
+            }
+
             try
             {
                 if (protocol == PullProtocol.Rtsp)

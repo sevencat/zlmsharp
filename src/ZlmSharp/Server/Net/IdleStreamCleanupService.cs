@@ -96,7 +96,31 @@ internal sealed class IdleStreamCleanupService : BackgroundService
 
             if (publishers.Count == 0)
             {
-                // 发布者已消失但流还留着（异常退出、代理断开）：直接回收
+                // 拉流代理没有 Publisher 会话：它的生命周期由 RtmpPullProxyManager 持有
+                // （addStreamProxy / delStreamProxy），不能当残留流回收——观众只是短暂断开
+                // 20 秒，整条代理流就会被摘掉，且代理重连只往已关闭的 source 写帧，流再也回不来。
+                if (string.Equals(source.OriginType, "proxy", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!_options.Protocol.AutoClose)
+                    {
+                        continue;
+                    }
+
+                    _logger.LogInformation(
+                        "无人观看回收代理流 {Key}（auto_close=1，闲置 {Idle:F1}s，schema={Schema}）",
+                        source.Key,
+                        (now - source.IdleSince).TotalSeconds,
+                        source.Schema);
+                    (closable ??= []).Add(source.Key);
+                    continue;
+                }
+
+                // 发布者已消失但流还留着（推流端异常退出）：直接回收
+                _logger.LogInformation(
+                    "回收残留流 {Key}（发布者已消失，闲置 {Idle:F1}s，schema={Schema}）",
+                    source.Key,
+                    (now - source.IdleSince).TotalSeconds,
+                    source.Schema);
                 (closable ??= []).Add(source.Key);
                 continue;
             }

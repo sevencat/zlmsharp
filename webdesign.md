@@ -71,21 +71,24 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
                                    │
               AdminPageEndpoints 读磁盘 + 内容协商
                                    ▼
-                    浏览器 GET /  →  304 或 200
+              浏览器 GET /zlm/admin  →  304 或 200
 ```
 
-> 新增宿主项目时，若要把管理页面一起发布，需照抄 CLI 项目的那三条 `Content Include`（`Link="WebUI\..."`），否则 `GET /` 会 404。
+> 新增宿主项目时，若要把管理页面一起发布，需照抄 CLI 项目的那三条 `Content Include`（`Link="WebUI\..."`），否则 `GET /zlm/admin` 会 404。
 
 ### 3.1 后端路由
 
-`AdminPageEndpoints` 只占三个路径，不与 `/index/api/*`、`.live.flv` 的 catch-all 冲突：
+`AdminPageEndpoints` 只占 `/zlm/admin` 前缀，不占用 `/`（归宿主），也不与 `/index/api/*`、`.live.flv` 的 catch-all 冲突：
 
 | 路径 | 行为 |
 |---|---|
-| `GET /` | 返回 `index.html` |
-| `GET /admin` | 同上（书签兼容） |
-| `GET /admin/index.html` | 同上 |
-| `GET /admin/其它` | 404 纯文本 |
+| `GET /zlm/admin` | 返回 `index.html`（尾部斜杠等价） |
+| `GET /zlm/admin/` | 同上（推荐入口） |
+| `GET /zlm/admin/index.html` | 同上（书签兼容） |
+| `GET /zlm/admin/其它` | 404 纯文本 |
+| `GET /`、`GET /admin` | 不占用，交给宿主 |
+
+前缀由 `AdminPageEndpoints` 里的 `RoutePrefix` 常量控制（`/zlm/admin`），改一处即可整体迁移。
 
 ### 3.2 响应策略
 
@@ -101,7 +104,7 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 ## 4. 前端约定
 
 ### 4.1 必须用 hash 路由
-产物部署在 `/`，后端没有任何 SPA 回退规则，`createWebHashHistory()` 是唯一不 404 的选择。
+产物部署在 `/zlm/admin/`，后端没有任何 SPA 回退规则（`/zlm/admin/xxx` 一律 404），`createWebHashHistory()` 是唯一不 404 的选择。
 
 ### 4.2 图标（Buefy 不内置字体）
 
@@ -215,7 +218,7 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 
 ## 8. 约束与已知限制
 
-1. **必须随包带 `WebUI/` 目录**：页面不再内嵌进程序集，目录缺失时 `GET /` 返回 404 文本（写明了期望路径）。库项目的 `Content` 不向引用方传递，宿主项目（CLI / Sample / 新宿主）需各自 `Content Include` 并 `Link="WebUI\..."`。
+1. **必须随包带 `WebUI/` 目录**：页面不再内嵌进程序集，目录缺失时 `GET /zlm/admin` 返回 404 文本（写明了期望路径）。库项目的 `Content` 不向引用方传递，宿主项目（CLI / Sample / 新宿主）需各自 `Content Include` 并 `Link="WebUI\..."`。
 2. **前端构建需要 Node**，但产物入库，日常开发与 CI 不依赖 Node。
 3. **没有配置读写接口**（`getServerConfig` / `setServerConfig` 等未实现），因此页面做不了在线改配置；需要在后端补接口。
 4. **拉流代理没有列表接口**：页面只记录本次会话添加的 `key`，刷新后列表丢失（停止时也可用 `app/stream` 参数代替 `key`）。

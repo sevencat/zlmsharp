@@ -9,51 +9,120 @@ const video = ref<HTMLVideoElement | null>(null)
 const message = ref('')
 const url = ref('')
 
+// 媒体解码类错误（编码不支持等）重试意义不大，限制次数；网络类错误保持无限重连
+const MEDIA_ERROR_MAX_RETRY = 3
+const RETRY_BASE_DELAY = 1000
+const RETRY_MAX_DELAY = 5000
+
 let player: any = null
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let retryCount = 0
+let mediaErrorCount = 0
+// 组件是否仍然存活，卸载后不再重连
+let alive = false
+
+function clearRetry() {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+}
 
 function destroy() {
+  clearRetry()
   if (!player) return
+  const p = player
+  player = null
   try {
-    player.pause()
-    player.unload()
-    player.detachMediaElement()
-    player.destroy()
+    p.pause()
+    p.unload()
+    p.detachMediaElement()
+    p.destroy()
   } catch {
     // 播放器已被卸载时忽略
   }
-  player = null
 }
 
-function start() {
+function scheduleRetry(reason: string) {
+  if (!alive) return
+  retryCount += 1
+  const delay = Math.min(RETRY_BASE_DELAY * 2 ** (retryCount - 1), RETRY_MAX_DELAY)
+  message.value = `${reason}，${Math.round(delay / 1000)}s 后重连（第 ${retryCount} 次）`
+  clearRetry()
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    attach()
+  }, delay)
+}
+
+function attach() {
+  if (!alive || !video.value || !url.value) return
   destroy()
-  message.value = ''
-  url.value = flvUrl(props.app, props.stream)
 
   if (!mpegts.isSupported()) {
     message.value = '当前浏览器不支持 MSE（mpegts.js），无法播放 HTTP-FLV'
     return
   }
 
-  player = mpegts.createPlayer(
+  const p = mpegts.createPlayer(
     { type: 'flv', url: url.value, isLive: true },
-    { enableStashBuffer: false, liveBufferLatencyChasing: true },
+    {
+      enableStashBuffer: false, // 不攒缓冲，保证实时
+      liveBufferLatencyChasing: true, // 落后时加速/跳帧追上去
+      liveBufferLatencyMaxLatency: 1.5, // 超过 1.5s 才开始追
+      liveBufferLatencyMinRemain: 0.5, // 追到只剩 0.5s 余量就停
+      autoCleanupSourceBuffer: true, // 定期清理已播数据，长时间播放不越积越多
+    },
   )
-  player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
-    message.value = `播放失败：${type} ${detail}`
+  player = p
+
+  p.on(mpegts.Events.ERROR, (type: string, detail: string) => {
+    // 旧实例的迟到回调，忽略
+    if (player !== p) return
+    console.warn('mpegts error', type, detail, p.mediaInfo)
+
+    if (type === mpegts.ErrorTypes.MEDIA_ERROR) {
+      mediaErrorCount += 1
+      if (mediaErrorCount > MEDIA_ERROR_MAX_RETRY) {
+        destroy()
+        message.value = `播放失败：${type} ${detail}（已重试 ${MEDIA_ERROR_MAX_RETRY} 次，可能是编码不受支持）`
+        return
+      }
+    }
+
+    destroy()
+    scheduleRetry(`播放中断：${type} ${detail}`)
   })
 
-  if (video.value) {
-    player.attachMediaElement(video.value)
-    player.load()
-    player.play().catch(() => {
-      // 浏览器自动播放策略：静音后一般可自动播放，失败时等用户点播放
-    })
-  }
+  // 真正出流后清空错误计数与提示
+  p.on(mpegts.Events.MEDIA_INFO, () => {
+    retryCount = 0
+    mediaErrorCount = 0
+    message.value = ''
+  })
+
+  p.attachMediaElement(video.value)
+  p.load()
+  Promise.resolve(p.play()).catch(() => {
+    // 浏览器自动播放策略：静音后一般可自动播放，失败时等用户点播放
+  })
+}
+
+function start() {
+  alive = true
+  retryCount = 0
+  mediaErrorCount = 0
+  message.value = ''
+  url.value = flvUrl(props.app, props.stream)
+  attach()
 }
 
 watch(() => [props.app, props.stream], start)
 onMounted(start)
-onBeforeUnmount(destroy)
+onBeforeUnmount(() => {
+  alive = false
+  destroy()
+})
 
 defineExpose({ destroy })
 </script>
