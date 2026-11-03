@@ -64,18 +64,48 @@ export interface PushState {
   error?: string | null
 }
 
-export interface YoloObject {
-  classId: number
-  className: string
-  confidence: number
-  x: number
-  y: number
-  width: number
-  height: number
-  trackId: number
+export interface ProxyState {
+  key: string
+  vhost: string
+  app: string
+  stream: string
+  url: string
+  online: boolean
+  startedAt: number
+  elapsedMs: number
 }
 
-export interface YoloSnapshot {
+export interface AnalyzerInfo {
+  id: string
+  displayName: string
+  enabled: boolean
+  ready: boolean
+  model: string
+  modelDir: string
+  device: string
+  backend: string
+  labels: string[]
+  models: string[]
+  loadedModels: string[]
+  settings: Record<string, string>
+  error?: string | null
+}
+
+export interface AnalysisPrimitive {
+  kind: string
+  label: string
+  score: number
+  trackId?: number | null
+  x?: number | null
+  y?: number | null
+  width?: number | null
+  height?: number | null
+  points?: { x: number; y: number }[] | null
+  text?: string | null
+}
+
+export interface AnalysisData {
+  analyzer: string
   vhost: string
   app: string
   stream: string
@@ -85,27 +115,11 @@ export interface YoloSnapshot {
   width: number
   height: number
   count: number
-  objects: YoloObject[]
+  primitives: AnalysisPrimitive[]
   error?: string | null
 }
 
-export interface YoloInfo {
-  enabled: boolean
-  loaded: boolean
-  model: string
-  modelDir: string
-  device: string
-  inputWidth: number
-  inputHeight: number
-  confidence: number
-  classCount: number
-  task?: string | null
-  classNames: string[]
-  models: string[]
-  loadedModels: string[]
-}
-
-export interface YoloOverlayState {
+export interface OverlayState {
   vhost: string
   app: string
   stream: string

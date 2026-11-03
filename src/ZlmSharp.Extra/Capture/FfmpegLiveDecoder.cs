@@ -1,6 +1,7 @@
 using System.Diagnostics;
+using ZlmSharp.Ai;
 
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Capture;
 
 /// <summary>
 /// 常驻的 ffmpeg 解码子进程：一条流一个进程，持续输出固定尺寸的 RGB24 原始帧，

@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ZlmSharp\ZlmSharp.csproj" />
+    <ProjectReference Include="..\..\src\ZlmSharp.Extra\ZlmSharp.Extra.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Extra\ZlmSharp.Extra.csproj" />
   </ItemGroup>
 
   <!-- NLog 大量使用反射（布局渲染器/目标工厂），NativeAOT 下整体保留，避免运行期丢失类型 -->

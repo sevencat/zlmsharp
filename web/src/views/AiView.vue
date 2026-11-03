@@ -2,17 +2,17 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { call } from '../api'
 import FlvPlayer from '../components/FlvPlayer.vue'
-import type { YoloInfo, YoloOverlayState, YoloSnapshot } from '../types'
+import type { AnalysisData, AnalyzerInfo, OverlayState } from '../types'
 
-const info = ref<YoloInfo | null>(null)
-const snapshots = ref<YoloSnapshot[]>([])
-const overlays = ref<YoloOverlayState[]>([])
-const analysis = ref('')
+const analyzers = ref<AnalyzerInfo[]>([])
+const results = ref<AnalysisData[]>([])
+const overlays = ref<OverlayState[]>([])
 const busy = ref('')
 const stream = ref('')
+const analyzerFilter = ref('')
 const playing = ref<{ app: string; stream: string } | null>(null)
 
-const overlayForm = reactive({ app: 'live', stream: '', fps: 0, scale: 2 })
+const overlayForm = reactive({ app: 'live', stream: '', analyzer: '', fps: 0 })
 
 const playActive = computed({
   get: () => playing.value !== null,
@@ -32,36 +32,39 @@ async function guard(label: string, action: () => Promise<unknown>) {
   }
 }
 
-const loadInfo = () => guard('info', async () => (info.value = await call<YoloInfo>('yoloInfo')))
-const loadSnapshots = () =>
-  guard('snapshot', async () => (snapshots.value = await call<YoloSnapshot[]>('getYoloResult', { stream: stream.value })))
-const loadOverlays = () =>
-  guard('overlay', async () => (overlays.value = await call<YoloOverlayState[]>('getYoloOverlay')))
-const loadAnalysis = () =>
-  guard('analysis', async () => {
-    const data = await call('analyzeResult', { stream: stream.value })
-    analysis.value = JSON.stringify(data, null, 2)
+const loadAnalyzers = () =>
+  guard('analyzers', async () => (analyzers.value = await call<AnalyzerInfo[]>('getAnalyzerList')))
+
+const loadResults = () =>
+  guard('results', async () => {
+    results.value = await call<AnalysisData[]>('analyzeResult', {
+      stream: stream.value,
+      analyzer: analyzerFilter.value,
+    })
   })
+
+const loadOverlays = () => guard('overlay', async () => (overlays.value = await call<OverlayState[]>('getOverlay')))
 
 const startOverlay = () =>
   guard('start', async () => {
-    await call('startYoloOverlay', {
+    await call('startOverlay', {
       app: overlayForm.app,
       stream: overlayForm.stream,
+      analyzer: overlayForm.analyzer || undefined,
       fps: overlayForm.fps || undefined,
-      scale: overlayForm.scale,
     })
     await loadOverlays()
   })
 
-const stopOverlay = (item: YoloOverlayState) =>
+const stopOverlay = (item: OverlayState) =>
   guard(`stop-${item.overlayStream}`, async () => {
-    await call('stopYoloOverlay', { app: item.app, stream: item.stream })
+    await call('stopOverlay', { app: item.app, stream: item.stream })
     await loadOverlays()
   })
 
 onMounted(async () => {
-  await loadInfo()
+  await loadAnalyzers()
+  await loadResults()
   await loadOverlays()
 })
 </script>
@@ -70,35 +73,59 @@ onMounted(async () => {
   <div>
     <section class="panel">
       <header>
-        <h2>YOLO 状态</h2>
-        <b-button size="is-small" icon-left="refresh" :loading="busy === 'info'" @click="loadInfo">刷新</b-button>
+        <h2>分析器</h2>
+        <b-button size="is-small" icon-left="refresh" :loading="busy === 'analyzers'" @click="loadAnalyzers">刷新</b-button>
       </header>
 
-      <div v-if="info" class="card-grid">
-        <div class="metric"><div class="value">{{ info.enabled ? '启用' : '未启用' }}</div><div class="label">服务状态</div></div>
-        <div class="metric"><div class="value">{{ info.loaded ? '已加载' : '未加载' }}</div><div class="label">模型</div></div>
-        <div class="metric"><div class="value">{{ info.classCount }}</div><div class="label">类别数</div></div>
-        <div class="metric"><div class="value">{{ info.inputWidth }}x{{ info.inputHeight }}</div><div class="label">输入尺寸</div></div>
+      <div class="table-wrap">
+        <table class="table is-fullwidth is-hoverable">
+          <thead>
+            <tr><th>分析器</th><th>状态</th><th>模型</th><th>设备</th><th>后端</th><th>类别数</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in analyzers" :key="item.id">
+              <td class="mono">{{ item.displayName }}（{{ item.id }}）</td>
+              <td>
+                <b-tag
+                  size="is-small"
+                  :type="item.enabled ? (item.ready ? 'is-success is-light' : 'is-warning is-light') : 'is-danger is-light'"
+                >
+                  {{ item.enabled ? (item.ready ? '就绪' : '未加载') : '未启用' }}
+                </b-tag>
+              </td>
+              <td class="mono">{{ item.model || '-' }}</td>
+              <td class="mono">{{ item.device || '-' }}</td>
+              <td class="mono">{{ item.backend || '-' }}</td>
+              <td>{{ item.labels.length }}</td>
+              <td class="muted">{{ item.error ?? '-' }}</td>
+            </tr>
+            <tr v-if="analyzers.length === 0">
+              <td colspan="7" class="empty">没有分析器（未接入 ZlmSharp.Extra，或未注册任何分析器）</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-      <p v-if="info" class="muted mono">model={{ info.model }} · device={{ info.device }} · conf={{ info.confidence }}</p>
-      <p v-else class="empty">未获取到模型信息</p>
     </section>
 
     <section class="panel">
       <header>
-        <h2>检测结果</h2>
+        <h2>分析结果</h2>
         <div class="toolbar">
+          <b-select v-model="analyzerFilter" size="is-small" placeholder="分析器（全部）">
+            <option value="">全部</option>
+            <option v-for="item in analyzers" :key="item.id" :value="item.id">{{ item.displayName }}</option>
+          </b-select>
           <b-input v-model="stream" size="is-small" placeholder="stream（留空=全部）" clearable />
-          <b-button size="is-small" :loading="busy === 'snapshot'" @click="loadSnapshots">查询 YOLO</b-button>
-          <b-button size="is-small" :loading="busy === 'analysis'" @click="loadAnalysis">通用分析</b-button>
+          <b-button size="is-small" :loading="busy === 'results'" @click="loadResults">查询</b-button>
         </div>
       </header>
 
       <div class="table-wrap">
         <table class="table is-fullwidth is-hoverable">
-          <thead><tr><th>流</th><th>尺寸</th><th>目标数</th><th>检测耗时</th><th>结果年龄</th><th>错误</th></tr></thead>
+          <thead><tr><th>分析器</th><th>流</th><th>尺寸</th><th>目标数</th><th>耗时</th><th>结果年龄</th><th>错误</th></tr></thead>
           <tbody>
-            <tr v-for="item in snapshots" :key="`${item.app}/${item.stream}`">
+            <tr v-for="item in results" :key="`${item.analyzer}/${item.app}/${item.stream}`">
+              <td class="mono">{{ item.analyzer }}</td>
               <td class="mono">{{ item.app }}/{{ item.stream }}</td>
               <td>{{ item.width }}x{{ item.height }}</td>
               <td>{{ item.count }}</td>
@@ -106,23 +133,21 @@ onMounted(async () => {
               <td>{{ Math.round(item.ageMs / 1000) }}s</td>
               <td class="muted">{{ item.error ?? '-' }}</td>
             </tr>
-            <tr v-if="snapshots.length === 0"><td colspan="6" class="empty">暂无检测结果</td></tr>
+            <tr v-if="results.length === 0"><td colspan="7" class="empty">暂无分析结果</td></tr>
           </tbody>
         </table>
       </div>
 
-      <p v-if="snapshots[0]?.objects.length" class="muted">
-        首个结果的类别：
+      <p v-if="results[0]?.primitives.length" class="muted">
+        首个结果的图元：
         <b-tag
-          v-for="object in snapshots[0].objects.slice(0, 12)"
-          :key="`${object.trackId}-${object.classId}`"
+          v-for="primitive in results[0].primitives.slice(0, 12)"
+          :key="`${primitive.trackId}-${primitive.label}`"
           size="is-small"
           type="is-info is-light"
           style="margin-right: 4px"
-        >{{ object.className }} {{ (object.confidence * 100).toFixed(0) }}%</b-tag>
+        >{{ primitive.label }} {{ (primitive.score * 100).toFixed(0) }}%</b-tag>
       </p>
-
-      <pre v-if="analysis" class="json">{{ analysis }}</pre>
     </section>
 
     <section class="panel">
@@ -134,8 +159,11 @@ onMounted(async () => {
       <div class="toolbar">
         <b-input v-model="overlayForm.app" size="is-small" placeholder="app" />
         <b-input v-model="overlayForm.stream" size="is-small" placeholder="stream" />
+        <b-select v-model="overlayForm.analyzer" size="is-small" placeholder="分析器（全部）">
+          <option value="">全部</option>
+          <option v-for="item in analyzers" :key="item.id" :value="item.id">{{ item.displayName }}</option>
+        </b-select>
         <b-input v-model.number="overlayForm.fps" size="is-small" type="number" placeholder="fps（0=自动）" />
-        <b-input v-model.number="overlayForm.scale" size="is-small" type="number" placeholder="缩放倍数" />
         <b-button size="is-small" type="is-primary" icon-left="flash" :loading="busy === 'start'" @click="startOverlay">
           启动叠加
         </b-button>
@@ -172,7 +200,7 @@ onMounted(async () => {
     </section>
 
     <b-modal v-model="playActive" has-modal-card :can-cancel="true">
-      <div class="modal-card" style="width: auto; max-width: 960px">
+      <div class="modal-card player-modal" style="width: auto; max-width: 960px">
         <header class="modal-card-head">
           <p class="modal-card-title">{{ playing ? `${playing.app}/${playing.stream}` : '' }}</p>
         </header>

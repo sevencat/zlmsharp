@@ -115,7 +115,7 @@ public sealed record ApiYoloSnapshot(
 
 public sealed record ApiYoloResultResponse(int Code, IReadOnlyList<ApiYoloSnapshot> Data);
 
-/// <summary>一路叠加流（<c>{stream}_yolo</c>）的状态。</summary>
+/// <summary>一路叠加流（<c>{stream}_ai</c>）的状态（yolo 兼容端点）。</summary>
 public sealed record ApiYoloOverlayData(
     string Vhost,
     string App,
@@ -191,3 +191,16 @@ public sealed record ApiProxyKeyResponse(int Code, ApiProxyKeyData Data);
 public sealed record ApiProxyFlagData(bool Flag);
 
 public sealed record ApiProxyFlagResponse(int Code, ApiProxyFlagData Data);
+
+/// <summary>一路拉流代理的状态（<c>getProxyList</c>）。</summary>
+public sealed record ApiProxyData(
+    string Key,
+    string Vhost,
+    string App,
+    string Stream,
+    string Url,
+    bool Online,
+    long StartedAt,
+    long ElapsedMs);
+
+public sealed record ApiProxyListResponse(int Code, IReadOnlyList<ApiProxyData> Data);

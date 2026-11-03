@@ -1,6 +1,9 @@
 using ZlmSharp.Ai;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
+using ZlmSharp.Extra.Analysis;
+using ZlmSharp.Extra.Overlay;
+using ZlmSharp.Extra.Yolo;
 
 namespace ZlmSharp.Tests;
 
@@ -162,12 +165,14 @@ public class YoloOverlayTests
     [Fact]
     public void OverlayStreamNames_AreRecognized()
     {
-        Assert.Equal("cam_yolo", YoloOverlayManager.OverlayStreamName("cam"));
-        Assert.True(YoloOverlayManager.IsOverlayStream("cam_yolo"));
-        Assert.True(YoloOverlayManager.IsOverlayStream("CAM_YOLO"));
-        Assert.False(YoloOverlayManager.IsOverlayStream("yolo"));
-        Assert.False(YoloOverlayManager.IsOverlayStream("cam"));
-        Assert.False(YoloOverlayManager.IsOverlayStream(null));
+        using var manager = CreateManager(out _);
+
+        Assert.Equal("cam_ai", manager.OverlayStreamName("cam"));
+        Assert.True(manager.IsOverlayStream("cam_ai"));
+        Assert.True(manager.IsOverlayStream("CAM_AI"));
+        Assert.False(manager.IsOverlayStream("ai"));
+        Assert.False(manager.IsOverlayStream("cam"));
+        Assert.False(manager.IsOverlayStream(null));
     }
 
     [Fact]
@@ -175,7 +180,7 @@ public class YoloOverlayTests
     {
         using var manager = CreateManager(out _);
 
-        var exception = Assert.Throws<ArgumentException>(() => manager.Start(string.Empty, "live", "cam_yolo"));
+        var exception = Assert.Throws<ArgumentException>(() => manager.Start(string.Empty, "live", "cam_ai"));
         Assert.Contains("不能对叠加流再叠加", exception.Message);
     }
 
@@ -228,7 +233,7 @@ public class YoloOverlayTests
         options.Rtmp.Port = rtmpPort;
 
         registry = new MediaSourceRegistry();
-        return new YoloOverlayManager(registry, new YoloResultStore(), options);
+        return new YoloOverlayManager(registry, options, new OverlayResultCache(), OverlayComposer.Default());
     }
 
     private static void AssertPixel(byte[] pixels, int width, int x, int y, (byte R, byte G, byte B) expected)

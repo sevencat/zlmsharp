@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using ZlmSharp.Ai;
 using ZlmSharp.Core;
 
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Capture;
 
 /// <summary>
 /// 常驻解码器池：一路流一个 <see cref="FfmpegLiveDecoder"/>，空闲一段时间自动关闭。

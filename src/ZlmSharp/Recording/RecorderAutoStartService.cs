@@ -7,15 +7,14 @@ namespace ZlmSharp.Recording;
 
 /// <summary>
 /// <c>protocol.enable_mp4 / enable_flv_record</c> 打开时，自动为在线流录像。
-/// 跳过 <c>*_yolo</c> 叠加流，避免把派生流也录一份。
+/// 跳过 <c>*_ai</c>（<c>ZLM_OVERLAY_SUFFIX</c>）叠加流，避免把派生流也录一份。
 /// </summary>
 internal sealed class RecorderAutoStartService : BackgroundService
 {
-    private const string OverlaySuffix = "_yolo";
-
     private readonly RecorderManager _manager;
     private readonly MediaSourceRegistry _registry;
     private readonly AppOptions _options;
+    private readonly string _overlaySuffix;
     private readonly ILogger? _logger;
 
     public RecorderAutoStartService(
@@ -27,6 +26,7 @@ internal sealed class RecorderAutoStartService : BackgroundService
         _manager = manager;
         _registry = registry;
         _options = options;
+        _overlaySuffix = options.Env.OverlaySuffix;
         _logger = logger;
     }
 
@@ -78,7 +78,7 @@ internal sealed class RecorderAutoStartService : BackgroundService
         foreach (var source in _registry.Sources)
         {
             var key = source.Key;
-            if (source.IsClosed || key.Stream.EndsWith(OverlaySuffix, StringComparison.OrdinalIgnoreCase))
+            if (source.IsClosed || key.Stream.EndsWith(_overlaySuffix, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

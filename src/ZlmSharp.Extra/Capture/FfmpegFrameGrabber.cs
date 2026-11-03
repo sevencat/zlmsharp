@@ -1,6 +1,7 @@
 using System.Diagnostics;
+using ZlmSharp.Ai;
 
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Capture;
 
 /// <summary>
 /// 用 ffmpeg 从任意 URL（RTSP/RTMP/HTTP-FLV 等）抓一帧并转成 RGB24（PPM），

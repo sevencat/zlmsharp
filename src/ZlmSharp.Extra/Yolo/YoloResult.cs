@@ -1,4 +1,4 @@
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Yolo;
 
 /// <summary>一个检测框（坐标为原图像素，左上角 + 宽高）。</summary>
 public sealed record YoloObject(

@@ -1,6 +1,7 @@
 using ZlmSharp.Ai;
 using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Core;
+using ZlmSharp.Extra.Overlay;
 
 namespace ZlmSharp.Tests;
 
@@ -47,40 +48,6 @@ public class AnalysisLayerTests
     }
 
     [Fact]
-    public void YoloSnapshot_MapsToGenericPrimitives()
-    {
-        var snapshot = new YoloSnapshot(
-            "__defaultVhost__",
-            "live",
-            "cam",
-            DateTimeOffset.UtcNow,
-            12,
-            320,
-            240,
-            [
-                new YoloObject(2, "car", 0.91f, 10, 20, 30, 40) { TrackId = 7 },
-                new YoloObject(0, "person", 0.75f, 50, 60, 20, 80),
-            ],
-            null);
-
-        var result = YoloAnalyzer.FromSnapshot(snapshot);
-
-        Assert.Equal("yolo", result.AnalyzerId);
-        Assert.Equal("cam", result.Key.Stream);
-        Assert.Equal(2, result.Primitives.Count);
-
-        var car = result.Primitives[0];
-        Assert.Equal(AnalysisKind.Box, car.Kind);
-        Assert.Equal("car", car.Label);
-        Assert.Equal(7, car.TrackId);
-        Assert.Equal(10, car.X);
-        Assert.Equal(40, car.Height);
-        Assert.Equal("2", car.Attributes!["classId"]);
-
-        Assert.Null(result.Primitives[1].TrackId);
-    }
-
-    [Fact]
     public void Composer_DrawsBoxesPolygonsAndTextWithoutThrowing()
     {
         var image = new RgbImage(new byte[64 * 64 * 3], 64, 64);
@@ -120,8 +87,25 @@ public class AnalysisLayerTests
 
         Assert.Equal(2, registry.All.Count);
         Assert.Single(registry.Enabled);
-        Assert.Equal("yolo", registry.Enabled[0].Id);
+        Assert.Equal("yolo", registry.Enabled[0].Analyzer.Id);
         Assert.Null(registry.Get("missing"));
+    }
+
+    [Fact]
+    public void Registry_Registration_CarriesOutputs()
+    {
+        var registry = new AnalyzerRegistry();
+        registry.Register(new AnalyzerRegistration(new FakeAnalyzer("yolo", enabled: true))
+        {
+            Outputs = AnalysisOutputs.Snapshot | AnalysisOutputs.Overlay,
+            SampleIntervalMs = 2500,
+        });
+
+        var registration = registry.Get("yolo");
+        Assert.NotNull(registration);
+        Assert.Equal(AnalysisOutputs.Snapshot | AnalysisOutputs.Overlay, registration!.Outputs);
+        Assert.Equal(2500, registration.SampleIntervalMs);
+        Assert.Equal("yolo", registration.Analyzer.Id);
     }
 
     [Fact]

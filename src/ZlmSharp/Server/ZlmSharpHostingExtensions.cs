@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NLog.Extensions.Logging;
-using ZlmSharp.Ai;
 using ZlmSharp.Api;
 using ZlmSharp.Configuration;
 using ZlmSharp.Http;
@@ -37,7 +37,10 @@ public static class ZlmSharpHostingExtensions
         services.AddSingleton<Hooks.MediaHookService>();
         services.AddSingleton<ZlmSharp.Core.MediaHookHandler>(provider =>
             provider.GetRequiredService<Hooks.MediaHookService>().InvokeAsync);
-        services.AddZlmSharpYolo(runtime.Options.Env);
+        // AI 分析：核心库只注册契约容器（结果存储/分析器注册表），具体实现由 ZlmSharp.Extra
+        // 的 AddZlmSharpExtra 接入；不接入时相关 API 按“未启用”处理。
+        services.TryAddSingleton<ZlmSharp.Ai.Analysis.AnalysisResultStore>();
+        services.TryAddSingleton<ZlmSharp.Ai.Analysis.AnalyzerRegistry>();
         services.AddZlmSharpRecording();
         services.AddSingleton(provider =>
         {

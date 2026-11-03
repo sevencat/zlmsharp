@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ZlmSharp.Extra</RootNamespace>
+    <!-- AI/分析的可选实现包：取帧（ffmpeg）、YOLO 分析、叠加管线、采样调度。
+         核心库只保留契约与顶层调用；推理引擎适配器仍作为独立项目接入（IYoloBackendFactory）。 -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
+  </ItemGroup>
+
+</Project>

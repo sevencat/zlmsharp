@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using ZlmSharp.Ai;
 using ZlmSharp.Core;
+using ZlmSharp.Extra.Capture;
 
 namespace ZlmSharp.Tests;
 

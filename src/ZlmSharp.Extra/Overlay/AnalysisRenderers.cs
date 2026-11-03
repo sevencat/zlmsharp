@@ -1,4 +1,7 @@
-namespace ZlmSharp.Ai.Analysis;
+using ZlmSharp.Ai;
+using ZlmSharp.Ai.Analysis;
+
+namespace ZlmSharp.Extra.Overlay;
 
 /// <summary>检测框 + 标签（对应 YOLO 的默认画法）。</summary>
 public sealed class BoxOverlayRenderer : IOverlayRenderer

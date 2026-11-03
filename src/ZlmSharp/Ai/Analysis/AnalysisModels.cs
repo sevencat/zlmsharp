@@ -57,7 +57,7 @@ public sealed record FrameSample(StreamKey Key, RgbImage Image, long Dts = 0);
 
 /// <summary>
 /// 分析器（YOLO / OCR / 车牌 …）。实现应无状态或自行管理每路流的状态，
-/// 由调度方按 <see cref="Id"/> 决定是否对某路流启用。
+/// 由调度方按 <see cref="IStreamAnalyzer.Id"/> 决定是否对某路流启用。
 /// </summary>
 public interface IStreamAnalyzer
 {
@@ -72,6 +72,18 @@ public interface IStreamAnalyzer
     Task<AnalysisResult> AnalyzeAsync(FrameSample frame, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// 分析器可选能力：支持对单张图片分析（<c>analyzeDetect</c> / <c>yoloDetect</c>）。
+/// 不实现的分析器只能被定时采样调度。
+/// </summary>
+public interface IImageAnalysisCapable
+{
+    /// <summary>校验模型名等参数；非法时抛 <see cref="ArgumentException"/> / <see cref="FileNotFoundException"/> 等，消息直接返回给调用方。</summary>
+    void ValidateModel(string? model);
+
+    Task<AnalysisResult> AnalyzeImageAsync(RgbImage image, string? model, float? confidence, CancellationToken cancellationToken);
+}
+
 /// <summary>把分析结果画到 RGB 帧上；一个流可以叠加多个 renderer。</summary>
 public interface IOverlayRenderer
 {
@@ -80,23 +92,55 @@ public interface IOverlayRenderer
     void Render(RgbImage image, AnalysisResult result);
 }
 
+/// <summary>
+/// 结果消费方式（可组合）：默认只存快照；叠加模式只进叠加缓存；
+/// <see cref="None"/> 表示只跑分析，不保存也不叠加（第三方在分析器内部自行处理结果）。
+/// </summary>
+[Flags]
+public enum AnalysisOutputs
+{
+    None = 0,
+    Snapshot = 1,
+    Overlay = 2,
+    Sink = 4,
+}
+
+/// <summary>一个分析器的调度参数与结果去向。</summary>
+public sealed record AnalyzerRegistration(IStreamAnalyzer Analyzer)
+{
+    /// <summary>结果去向；默认只存快照（<c>analyzeResult</c> 可查）。</summary>
+    public AnalysisOutputs Outputs { get; init; } = AnalysisOutputs.Snapshot;
+
+    /// <summary>同一路流两次分析的最小间隔（毫秒）；0 表示用全局 <c>ZLM_ANALYSIS_SAMPLE_INTERVAL_MS</c>。</summary>
+    public int SampleIntervalMs { get; init; }
+}
+
+/// <summary>可选：结果旁路（告警、入库、转发）。声明了 <see cref="AnalysisOutputs.Sink"/> 的分析器结果会推给所有 sink。</summary>
+public interface IAnalysisSink
+{
+    ValueTask PublishAsync(AnalysisResult result, CancellationToken cancellationToken);
+}
+
 /// <summary>分析器注册表：新增分析器只需注册进来，调度与 API 不需要改。</summary>
 public sealed class AnalyzerRegistry
 {
-    private readonly ConcurrentDictionary<string, IStreamAnalyzer> _analyzers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, AnalyzerRegistration> _analyzers = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Register(IStreamAnalyzer analyzer)
+    public void Register(IStreamAnalyzer analyzer) => Register(new AnalyzerRegistration(analyzer));
+
+    public void Register(AnalyzerRegistration registration)
     {
-        ArgumentNullException.ThrowIfNull(analyzer);
-        _analyzers[analyzer.Id] = analyzer;
+        ArgumentNullException.ThrowIfNull(registration);
+        _analyzers[registration.Analyzer.Id] = registration;
     }
 
-    public IStreamAnalyzer? Get(string id) =>
-        _analyzers.TryGetValue(id, out var analyzer) ? analyzer : null;
+    public AnalyzerRegistration? Get(string id) =>
+        _analyzers.TryGetValue(id, out var registration) ? registration : null;
 
-    public IReadOnlyList<IStreamAnalyzer> All => _analyzers.Values.OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
+    public IReadOnlyList<AnalyzerRegistration> All =>
+        _analyzers.Values.OrderBy(item => item.Analyzer.Id, StringComparer.Ordinal).ToArray();
 
-    public IReadOnlyList<IStreamAnalyzer> Enabled => All.Where(item => item.Enabled).ToArray();
+    public IReadOnlyList<AnalyzerRegistration> Enabled => All.Where(item => item.Analyzer.Enabled).ToArray();
 }
 
 /// <summary>按 (流, 分析器) 保存最近一次结果，供 API 快照读取。</summary>

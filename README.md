@@ -12,7 +12,7 @@ A C#/.NET 8 port of the [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit) s
 - Hooks (`on_publish` / `on_play` / `on_stream_none_reader`), session registry, idle-stream reclamation
 - Optional YOLO detection / overlay on top of any live stream (pure managed inference, no native deps)
 - NativeAOT publish friendly; no reflection-heavy configuration binding
-
+-rtmp://liteavapp.qcloud.com/live/liteavdemoplayerstreamid
 ---
 
 ## Quick start
@@ -73,9 +73,11 @@ All responses follow ZLM's `{"code":0,"msg":"success","data":...}` envelope. `GE
 | `startRecord`, `stopRecord`, `isRecording` | Recording control: `type=1` MP4, `2` FLV, `3` MP4+FLV, `4` HLS, `5` all |
 | `getMp4RecordFile`, `deleteRecordFile` | List / delete recorded files (`app`+`stream`+`period`+`path`), path-escape safe |
 | `startPush`, `stopPush`, `getPushList` | RTMP relay push |
-| `addStreamProxy`, `delStreamProxy` | Pull proxy (RTMP/RTSP source → local stream) |
-| `yoloInfo`, `yoloDetect`, `getYoloResult` | YOLO model info, one-shot detection, latest periodic result |
-| `startYoloOverlay`, `stopYoloOverlay`, `getYoloOverlay` | Draw boxes onto a derived `{stream}_yolo` output stream |
+| `addStreamProxy`, `delStreamProxy`, `getProxyList` | Pull proxy (RTMP/RTSP source → local stream), list includes source URL and online state |
+| `yoloInfo`, `yoloDetect`, `getYoloResult` | YOLO model info, one-shot detection, latest periodic result (compat endpoints backed by the analyzer layer) |
+| `getAnalyzerList`, `analyzeDetect`, `analyzeResult` | Analyzer catalog, one-shot analysis for any analyzer (`analyzer=`), latest periodic results |
+| `startOverlay`, `stopOverlay`, `getOverlay` | Generic overlay: draw any analyzer's results onto a derived `{stream}_ai` output stream |
+| `startYoloOverlay`, `stopYoloOverlay`, `getYoloOverlay` | YOLO-flavored overlay endpoints (compat) |
 
 ## Pull proxy
 
@@ -102,11 +104,29 @@ list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/liv
 
 - `startRecord?app=&stream=&type=&max_second=` starts recording an online stream; files land in `ZLM_RECORD_ROOT` (fallback `protocol.mp4_save_path`) under `app/stream/yyyy-MM-dd/`.
 - MP4 samples use AVCC (`avcC` + `esds`), FLV is append-only (survives crashes), HLS writes `hls-000001.ts…` + `hls.m3u8` aligned on key frames (`[hls] seg_duration`, `seg_num`).
-- Recording resumes automatically after a publisher reconnects; `protocol.enable_mp4` / `enable_flv_record` enable always-on recording at startup (`*_yolo` streams are skipped).
+- Recording resumes automatically after a publisher reconnectes; `protocol.enable_mp4` / `enable_flv_record` enable always-on recording at startup (`*_ai` overlay streams are skipped).
 
-## YOLO (optional)
+## AI analysis (optional, ZlmSharp.Extra)
 
-Configured entirely through `.env`: `ZLM_YOLO_MODEL_DIR`, `ZLM_YOLO_MODEL`, `ZLM_YOLO_DEVICE` (`cpu`/`vulkan`/`metal`/`auto`), `ZLM_YOLO_CONFIDENCE`, input size, thread count, sample interval. Models are loaded lazily and cached (LRU); inference runs on a resident ffmpeg decoder frame, and results are kept per stream with stable IoU `trackId`s. `startYoloOverlay` spawns a decode → draw → encode pipeline that publishes `{stream}_yolo` back into the server.
+The core library keeps only contracts and HTTP entry points. Frame capture (ffmpeg), inference, tracking, drawing and the overlay pipeline live in `ZlmSharp.Extra`, which hosts opt into explicitly; without it every AI endpoint answers "not enabled".
+
+```csharp
+builder.Services.AddZlmSharp(...);          // core: protocols + API, zero AI dependencies
+builder.Services.AddZlmSharpExtra(extra =>  // optional: built-in YOLO + sampling scheduler + overlay pipeline
+{
+    extra.AddAnalyzer<MyOcrAnalyzer>(o => o.Outputs = AnalysisOutputs.None); // analyze only, ignore results
+});
+```
+
+Built-in YOLO is configured entirely through `.env`: `ZLM_YOLO_MODEL_DIR`, `ZLM_YOLO_MODEL`, `ZLM_YOLO_DEVICE` (`cpu`/`vulkan`/`metal`/`auto`), `ZLM_YOLO_CONFIDENCE`, input size, thread count, sample interval. Models are loaded lazily and cached (LRU); inference runs on a resident ffmpeg decoder frame, and results are kept per stream with stable IoU `trackId`s. `startYoloOverlay` / `startOverlay` spawn a decode → draw → encode pipeline that publishes `{stream}_ai` back into the server.
+
+Third-party algorithms plug in without touching the core (see `extra-design.md`):
+
+- **L1 (recommended)**: implement `IStreamAnalyzer` (plus optional `IOverlayRenderer` / `IAnalysisSink`) — you get `FrameSample` (RGB24) and return `AnalysisResult` primitives; no ffmpeg/HTTP knowledge required.
+- **L2 (inference kernel)**: implement `IYoloBackendFactory` / `IYoloInferenceBackend` to reuse the built-in YOLO pre/post-processing and model cache with a different inference kernel (e.g. ONNX Runtime / vendor SDK adapters).
+- Result routing: `Snapshot` (queryable via `analyzeResult`), `Snapshot|Overlay` (derived `{stream}_ai` stream), `None` (analysis only — the algorithm consumes its own results). Directory-scan plugin loading is not implemented yet; third parties register at compile time via `AddAnalyzer` (AOT friendly).
+
+Common configuration: `ZLM_EXTRA_ENABLE`, `ZLM_ANALYSIS_SAMPLE_INTERVAL_MS`, `ZLM_ANALYSIS_ENABLED` (whitelist), `ZLM_OVERLAY_SUFFIX` (default `_ai`).
 
 ## Hooks and stability
 
@@ -136,9 +156,11 @@ app.UseZlmSharp();
 
 ```
 src/ZlmSharp/           class library "ZlmSharp.MediaServer" (namespaces mirror ZLM structure)
-  Core/ Codecs/ Configuration/ Protocols/{Flv,Rtmp,Rtsp}/ Http/ Recording/ Ai/ Api/ Server/
+  Core/ Codecs/ Configuration/ Protocols/{Flv,Rtmp,Rtsp}/ Http/ Recording/ Api/ Server/
+  Ai/                    AI contracts (IStreamAnalyzer / IOverlayController / result models) + top-level calls
+src/ZlmSharp.Extra/     AI implementation ("ZlmSharp.Extra"): ffmpeg capture, YOLO, overlay pipeline, sampling scheduler
 src/ZlmSharp.Cli/       executable entry point (product: zlmsharp.exe, NativeAOT)
-samples/…Sample.Web/    embedding sample
+samples/…Sample.Web/    embedding sample (no Extra — AI endpoints degrade to "not enabled")
 tests/ZlmSharp.Tests/   xUnit unit + end-to-end tests
 assets/                 app.ico (multi-size) + app-icon.png, generated by tools/make-icon.ps1
 ```

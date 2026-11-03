@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ZlmSharp.Configuration;
+using ZlmSharp.Extra;
 using ZlmSharp.Server;
 
 namespace ZlmSharp.Cli;
@@ -125,6 +126,9 @@ internal static class CliApplication
             options.ClearOtherLoggingProviders = true;
             options.RegisterStreamListeners = true;
         });
+
+        // AI 分析/叠加的可选实现包：默认接入内置 YOLO；ZLM_EXTRA_ENABLE=0 可整体关闭
+        builder.Services.AddZlmSharpExtra();
 
         ZlmSharpKestrel.Configure(builder, config.Options);
 

@@ -1,8 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
+using ZlmSharp.Ai;
 
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Capture;
 
 /// <summary>
 /// P6（二进制 RGB）PPM 解析。选它做图片中转格式是因为零依赖：

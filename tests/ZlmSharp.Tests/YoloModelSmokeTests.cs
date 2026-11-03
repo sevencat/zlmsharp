@@ -1,4 +1,5 @@
 using ZlmSharp.Ai;
+using ZlmSharp.Extra.Yolo;
 
 namespace ZlmSharp.Tests;
 

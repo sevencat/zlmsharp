@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using ZlmSharp.Configuration;
+using ZlmSharp.Extra;
 using ZlmSharp.Server;
 
 namespace ZlmSharp.Tests;
@@ -176,7 +177,7 @@ public class YoloApiTests
         try
         {
             using var client = new HttpClient();
-            using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/startYoloOverlay?app=live&stream=cam_yolo"));
+            using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/startYoloOverlay?app=live&stream=cam_ai"));
             var root = document.RootElement;
 
             Assert.Equal(-1, root.GetProperty("code").GetInt32());
@@ -297,6 +298,55 @@ public class YoloApiTests
         return client.PostAsync($"{GetAddress(app)}/index/api/yoloDetect?model={Uri.EscapeDataString(model)}", content);
     }
 
+    [Fact]
+    public async Task AnalyzerList_ReportsBuiltInYolo()
+    {
+        using var app = await StartHostAsync(null);
+        using var client = new HttpClient();
+
+        using var document = JsonDocument.Parse(await client.GetStringAsync($"{GetAddress(app)}/index/api/getAnalyzerList"));
+        var root = document.RootElement;
+
+        Assert.Equal(0, root.GetProperty("code").GetInt32());
+        var data = root.GetProperty("data");
+        Assert.Equal(1, data.GetArrayLength());
+        var analyzer = data[0];
+        Assert.Equal("yolo", analyzer.GetProperty("id").GetString());
+        Assert.False(analyzer.GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task AnalyzeDetect_RequiresAnalyzerParam()
+    {
+        using var app = await StartHostAsync(null);
+        using var client = new HttpClient();
+
+        using var content = new ByteArrayContent(BuildPpm(2, 2));
+        using var response = await client.PostAsync($"{GetAddress(app)}/index/api/analyzeDetect", content);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+
+        Assert.Equal(-1, root.GetProperty("code").GetInt32());
+        Assert.Contains("analyzer", root.GetProperty("msg").GetString());
+    }
+
+    [Fact]
+    public async Task YoloEndpoints_WithoutExtra_ReportNotEnabled()
+    {
+        // 宿主只引用核心库（没接 ZlmSharp.Extra）时，AI 端点按“未启用”优雅降级
+        using var app = await StartHostAsync("model.onnx", useExtra: false);
+        using var client = new HttpClient();
+        var address = GetAddress(app);
+
+        using var info = JsonDocument.Parse(await client.GetStringAsync($"{address}/index/api/yoloInfo"));
+        Assert.Equal(-1, info.RootElement.GetProperty("code").GetInt32());
+        Assert.Contains("未启用", info.RootElement.GetProperty("msg").GetString());
+
+        using var list = JsonDocument.Parse(await client.GetStringAsync($"{address}/index/api/getAnalyzerList"));
+        Assert.Equal(0, list.RootElement.GetProperty("code").GetInt32());
+        Assert.Equal(0, list.RootElement.GetProperty("data").GetArrayLength());
+    }
+
     private static string CreateModelDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "zlm-yolo-api-" + Guid.NewGuid().ToString("N"));
@@ -305,7 +355,7 @@ public class YoloApiTests
         return dir;
     }
 
-    private static async Task<WebApplication> StartHostAsync(string? yoloModel, string? yoloModelDir = null)
+    private static async Task<WebApplication> StartHostAsync(string? yoloModel, string? yoloModelDir = null, bool useExtra = true)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -321,6 +371,11 @@ public class YoloApiTests
             o.ConfigureLogging = false;
             o.RegisterStreamListeners = false;
         });
+
+        if (useExtra)
+        {
+            builder.Services.AddZlmSharpExtra();
+        }
 
         var app = builder.Build();
         app.UseZlmSharp();

@@ -73,7 +73,7 @@ ini 解析支持 `[section]`、`key=value`、整行 `;` / `#` 注释、同名键
 | `startRecord`、`stopRecord`、`isRecording` | 录像控制：`type=1` MP4、`2` FLV、`3` MP4+FLV、`4` HLS、`5` 全部 |
 | `getMp4RecordFile`、`deleteRecordFile` | 查询/删除录像文件（`app`+`stream`+`period`+`path`），越界路径拒绝 |
 | `startPush`、`stopPush`、`getPushList` | RTMP 转推 |
-| `addStreamProxy`、`delStreamProxy` | 拉流代理（RTMP/RTSP 源 → 本地流） |
+| `addStreamProxy`、`delStreamProxy`、`getProxyList` | 拉流代理（RTMP/RTSP 源 → 本地流），列表含源地址与在线状态 |
 | `yoloInfo`、`yoloDetect`、`getYoloResult` | 模型信息、单次检测、定时检测的最近结果 |
 | `startYoloOverlay`、`stopYoloOverlay`、`getYoloOverlay` | 把检测框画进派生流 `{stream}_yolo` |
 
@@ -102,11 +102,31 @@ list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/liv
 
 - `startRecord?app=&stream=&type=&max_second=` 对在线流开始录制；文件落在 `ZLM_RECORD_ROOT`（回退 `protocol.mp4_save_path`）下的 `app/stream/yyyy-MM-dd/`。
 - MP4 走 AVCC（`avcC` + `esds`），FLV 是追加式（崩溃可播），HLS 按关键帧对齐产出 `hls-000001.ts…` + `hls.m3u8`（`[hls] seg_duration`、`seg_num`）。
-- 推流端断线重推后会自动续录；`protocol.enable_mp4` / `enable_flv_record` 打开时开机自动录（跳过 `*_yolo` 流）。
+- 推流端断线重推后会自动续录；`protocol.enable_mp4` / `enable_flv_record` 打开时开机自动录（跳过 `*_ai` 叠加流）。
 
-## YOLO（可选）
+## AI 分析（可选，ZlmSharp.Extra）
 
-全部通过 `.env` 配置：`ZLM_YOLO_MODEL_DIR`、`ZLM_YOLO_MODEL`、`ZLM_YOLO_DEVICE`（`cpu`/`vulkan`/`metal`/`auto`）、`ZLM_YOLO_CONFIDENCE`、输入尺寸、线程数、采样间隔。模型懒加载并按 LRU 缓存；推理输入来自常驻 ffmpeg 解码器的最新一帧，结果按流保存并带稳定的 IoU `trackId`。`startYoloOverlay` 会拉起「解码 → 绘框 → 编码」管道，把 `{stream}_yolo` 推回本服务。
+核心库只保留契约与 HTTP 入口，取帧（ffmpeg）、推理、跟踪、绘框、叠加管线在 `ZlmSharp.Extra` 里，宿主显式 `AddZlmSharpExtra()` 接入；不接入时相关 API 按“未启用”返回。
+
+```csharp
+builder.Services.AddZlmSharp(...);          // 核心：协议 + API，零 AI 依赖
+builder.Services.AddZlmSharpExtra(extra =>  // 可选：内置 YOLO + 采样调度 + 叠加管线
+{
+    extra.AddAnalyzer<MyOcrAnalyzer>(o => o.Outputs = AnalysisOutputs.None); // 只分析，不管结果
+});
+```
+
+内置 YOLO 全部通过 `.env` 配置：`ZLM_YOLO_MODEL_DIR`、`ZLM_YOLO_MODEL`、`ZLM_YOLO_DEVICE`（`cpu`/`vulkan`/`metal`/`auto`）、`ZLM_YOLO_CONFIDENCE`、输入尺寸、线程数、采样间隔。模型懒加载并按 LRU 缓存；推理输入来自常驻 ffmpeg 解码器的最新一帧，结果按流保存并带稳定的 IoU `trackId`。`startYoloOverlay` / `startOverlay` 会拉起「解码 → 绘制 → 编码」管道，把 `{stream}_ai` 推回本服务。
+
+第三方算法接入（详见 `extra-design.md`）：
+
+- **L1 算法级（推荐）**：实现 `IStreamAnalyzer`（+ 可选 `IOverlayRenderer` / `IAnalysisSink`），只拿到 `FrameSample`（RGB24 帧）返回 `AnalysisResult` 图元，不碰 ffmpeg/HTTP。
+- **L2 推理内核级**：实现 `IYoloBackendFactory` / `IYoloInferenceBackend`，复用内置 YOLO 的前后处理与模型缓存，只替换推理内核（如 ONNX Runtime / 厂商 SDK 适配器）。
+- 结果去向三种：`Snapshot`（`analyzeResult` 可查）、`Snapshot|Overlay`（叠加成 `{stream}_ai` 流）、`None`（只跑分析，结果由算法自己消费）。目录扫描式插件加载暂未提供，第三方以编译期引用 + `AddAnalyzer` 接入（AOT 友好）。
+
+通用端点：`getAnalyzerList`（分析器清单）、`analyzeDetect`（单图分析）、`startOverlay` / `stopOverlay` / `getOverlay`（通用叠加）；旧端点 `yoloInfo` / `yoloDetect` / `getYoloResult` / `startYoloOverlay`… 保持兼容。
+
+全局开关与通用配置：`ZLM_EXTRA_ENABLE`、`ZLM_ANALYSIS_SAMPLE_INTERVAL_MS`、`ZLM_ANALYSIS_ENABLED`（白名单）、`ZLM_OVERLAY_SUFFIX`（默认 `_ai`）。
 
 ## Hook 与稳定性
 
@@ -136,9 +156,11 @@ app.UseZlmSharp();
 
 ```
 src/ZlmSharp/           类库（程序集 ZlmSharp.MediaServer，命名空间与 ZLM 结构对齐）
-  Core/ Codecs/ Configuration/ Protocols/{Flv,Rtmp,Rtsp}/ Http/ Recording/ Ai/ Api/ Server/
+  Core/ Codecs/ Configuration/ Protocols/{Flv,Rtmp,Rtsp}/ Http/ Recording/ Api/ Server/
+  Ai/                    AI 契约（IStreamAnalyzer / IOverlayController / 结果模型）与顶层调用
+src/ZlmSharp.Extra/     AI 实现（程序集 ZlmSharp.Extra）：ffmpeg 取帧、YOLO、叠加管线、分析调度
 src/ZlmSharp.Cli/       可执行入口（产物 zlmsharp.exe，NativeAOT）
-samples/…Sample.Web/    嵌入示例
+samples/…Sample.Web/    嵌入示例（未接 Extra，AI 端点按“未启用”降级）
 tests/ZlmSharp.Tests/   xUnit 单元 + 端到端测试
 assets/                 app.ico（多尺寸）与 app-icon.png，由 tools/make-icon.ps1 生成
 ```

@@ -18,6 +18,10 @@ public sealed class EnvOptions
     public const string YoloInputHeightKey = "ZLM_YOLO_INPUT_HEIGHT";
     public const string YoloCpuThreadsKey = "ZLM_YOLO_CPU_THREADS";
     public const string YoloSampleIntervalMsKey = "ZLM_YOLO_SAMPLE_INTERVAL_MS";
+    public const string OverlaySuffixKey = "ZLM_OVERLAY_SUFFIX";
+    public const string AnalysisSampleIntervalMsKey = "ZLM_ANALYSIS_SAMPLE_INTERVAL_MS";
+    public const string AnalysisEnabledKey = "ZLM_ANALYSIS_ENABLED";
+    public const string ExtraEnableKey = "ZLM_EXTRA_ENABLE";
 
     public string FfmpegBin { get; set; } = string.Empty;
 
@@ -46,6 +50,25 @@ public sealed class EnvOptions
 
     /// <summary>同一路流两次检测的最小间隔（毫秒）。</summary>
     public int YoloSampleIntervalMs { get; set; } = 1000;
+
+    /// <summary>叠加流名后缀（<c>{stream}_ai</c>），自动录像等模块据此跳过派生流。</summary>
+    public string OverlaySuffix { get; set; } = "_ai";
+
+    /// <summary>分析调度的全局采样间隔（毫秒）；未单独配置时沿用 <c>ZLM_YOLO_SAMPLE_INTERVAL_MS</c>。</summary>
+    public int AnalysisSampleIntervalMs { get; set; } = 1000;
+
+    /// <summary>分析器白名单（逗号分隔，如 <c>yolo,ocr</c>）；空表示全部已注册分析器。</summary>
+    public string AnalysisEnabled { get; set; } = string.Empty;
+
+    /// <summary>是否启用扩展包（分析调度与叠加）；<c>ZLM_EXTRA_ENABLE=0</c> 时关闭。</summary>
+    public bool ExtraEnable { get; set; } = true;
+
+    /// <summary>解析后的分析器白名单；空列表表示不过滤。</summary>
+    public IReadOnlyList<string> AnalysisEnabledList =>
+        AnalysisEnabled
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(item => item.ToLowerInvariant())
+            .ToArray();
 
     /// <summary>配置了模型路径即视为启用 YOLO。</summary>
     public bool YoloEnabled => !string.IsNullOrWhiteSpace(YoloModel);

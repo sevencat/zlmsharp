@@ -2,92 +2,76 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
+using ZlmSharp.Ai;
+using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
+using ZlmSharp.Extra.Analysis;
 
-namespace ZlmSharp.Ai;
-
-public enum YoloOverlayState
-{
-    Starting = 0,
-    Running = 1,
-    Stopped = 2,
-    Failed = 3,
-}
-
-/// <summary>一路叠加流的运行状态。</summary>
-public sealed record YoloOverlayStatus(
-    string Vhost,
-    string App,
-    string Stream,
-    string OverlayStream,
-    string InputUrl,
-    string OutputUrl,
-    YoloOverlayState State,
-    int Width,
-    int Height,
-    int Fps,
-    int BitrateKbps,
-    long Frames,
-    DateTimeOffset StartedAt,
-    double ElapsedMs,
-    string? Error)
-{
-    public bool Running => State is YoloOverlayState.Starting or YoloOverlayState.Running;
-}
+namespace ZlmSharp.Extra.Overlay;
 
 /// <summary>
-/// YOLO 结果叠加流：ffmpeg 解码本地 HTTP-FLV → 在 RGB24 帧上用 <see cref="FrameOverlay"/> 画框
-/// → ffmpeg 编码推回本机 RTMP，输出 <c>{stream}_yolo</c> 可直接播放。
+/// 结果叠加流：ffmpeg 解码本地 HTTP-FLV → 在 RGB24 帧上用注册的 <see cref="IOverlayRenderer"/> 绘制
+/// → ffmpeg 编码推回本机 RTMP，输出 <c>{stream}_ai</c> 可直接播放。
 /// </summary>
 /// <remarks>
 /// 本项目没有内置 H.264 解码/编码器，所以解码与编码都交给 ffmpeg 子进程，中间只传原始 RGB24 帧。
-/// 检测框来自 <see cref="YoloResultStore"/> 最近一次快照（<c>ZLM_YOLO_SAMPLE_INTERVAL_MS</c> 秒级刷新），
-/// 不对每一帧推理；叠加流本身（<c>*_yolo</c>）不会被定时检测采样，避免回路。
+/// 绘制内容来自 <see cref="OverlayResultCache"/> 中各分析器最近一次结果（采样间隔秒级刷新），
+/// 不对每一帧推理；叠加流本身（<c>*_ai</c>）不会被定时检测采样，避免回路。
 /// </remarks>
-public sealed class YoloOverlayManager : IDisposable
+public sealed class YoloOverlayManager : IOverlayController, IDisposable
 {
-    /// <summary>叠加流名后缀。</summary>
-    public const string StreamSuffix = "_yolo";
-
-    private static readonly TimeSpan DefaultDetectionMaxAge = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultResultMaxAge = TimeSpan.FromSeconds(5);
 
     private readonly MediaSourceRegistry _registry;
-    private readonly YoloResultStore _store;
+    private readonly OverlayResultCache _results;
+    private readonly OverlayComposer _composer;
     private readonly AppOptions _options;
+    private readonly string _suffix;
     private readonly ILogger? _logger;
-    private readonly ConcurrentDictionary<StreamKey, YoloOverlaySession> _sessions = new();
+    private readonly ConcurrentDictionary<StreamKey, OverlaySession> _sessions = new();
     private readonly object _gate = new();
     private int _disposed;
 
     public YoloOverlayManager(
         MediaSourceRegistry registry,
-        YoloResultStore store,
         AppOptions options,
+        OverlayResultCache results,
+        OverlayComposer composer,
         ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
-        ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(results);
+        ArgumentNullException.ThrowIfNull(composer);
 
         _registry = registry;
-        _store = store;
         _options = options;
+        _results = results;
+        _composer = composer;
+        _suffix = options.Env.OverlaySuffix;
         _logger = logger;
     }
 
-    public static string OverlayStreamName(string stream) => stream + StreamSuffix;
+    public string OverlayStreamName(string stream) => stream + _suffix;
 
     /// <summary>是否是叠加流（定时检测应跳过，避免对叠加结果再检测形成回路）。</summary>
-    public static bool IsOverlayStream(string? stream) =>
-        stream is not null && stream.EndsWith(StreamSuffix, StringComparison.OrdinalIgnoreCase);
+    public bool IsOverlayStream(string? stream) =>
+        stream is not null && stream.EndsWith(_suffix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// 开始（或重启）一路叠加流。源流必须在线且已收到关键帧（需要分辨率）。
     /// </summary>
     /// <exception cref="ArgumentException">参数非法（含对叠加流再叠加）。</exception>
     /// <exception cref="InvalidOperationException">源流不在线/分辨率未知/端口未开启。</exception>
-    public YoloOverlayStatus Start(string vhost, string app, string stream, int? fps = null, int bitrateKbps = 0, int labelScale = 2)
+    public OverlayStatus Start(
+        string vhost,
+        string app,
+        string stream,
+        int? fps = null,
+        int bitrateKbps = 0,
+        int labelScale = 2,
+        string? analyzerId = null)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
@@ -154,20 +138,23 @@ public sealed class YoloOverlayManager : IDisposable
                 previous.Dispose();
             }
 
-            var session = new YoloOverlaySession(
+            var session = new OverlaySession(
                 key,
                 sourceWidth,
                 sourceHeight,
-                _store,
+                _results,
+                _composer,
+                analyzerId,
                 _options.Env.ResolveFfmpegPath(),
                 inputUrl,
                 outputUrl,
+                OverlayStreamName(key.Stream),
                 width,
                 height,
                 targetFps,
                 bitrate,
                 scaleValue,
-                DefaultDetectionMaxAge,
+                DefaultResultMaxAge,
                 _logger);
 
             try
@@ -182,7 +169,7 @@ public sealed class YoloOverlayManager : IDisposable
 
             _sessions[key] = session;
             _logger?.LogInformation(
-                "YOLO 叠加流启动 {Key} → {Output}（{Width}x{Height}@{Fps}fps，{Bitrate}kbps）",
+                "结果叠加流启动 {Key} → {Output}（{Width}x{Height}@{Fps}fps，{Bitrate}kbps）",
                 key,
                 outputUrl,
                 width,
@@ -199,7 +186,7 @@ public sealed class YoloOverlayManager : IDisposable
     {
         var key = StreamKey.Create(vhost, app, stream);
 
-        YoloOverlaySession? session;
+        OverlaySession? session;
         lock (_gate)
         {
             if (!_sessions.TryRemove(key, out session))
@@ -209,7 +196,7 @@ public sealed class YoloOverlayManager : IDisposable
         }
 
         session.Dispose();
-        _logger?.LogInformation("YOLO 叠加流停止 {Key}", key);
+        _logger?.LogInformation("结果叠加流停止 {Key}", key);
         return true;
     }
 
@@ -227,15 +214,18 @@ public sealed class YoloOverlayManager : IDisposable
         return count;
     }
 
-    public YoloOverlayStatus? Get(string vhost, string app, string stream) =>
+    public OverlayStatus? Get(string vhost, string app, string stream) =>
         _sessions.TryGetValue(StreamKey.Create(vhost, app, stream), out var session) ? session.Snapshot() : null;
 
-    public IReadOnlyList<YoloOverlayStatus> List(string vhost = "", string app = "", string stream = "") =>
+    public IReadOnlyList<OverlayStatus> List(string vhost = "", string app = "", string stream = "") =>
         _sessions.Values
             .Select(session => session.Snapshot())
             .Where(item => Matches(item.Vhost, vhost) && Matches(item.App, app) && Matches(item.Stream, stream))
             .OrderBy(item => item.StartedAt)
             .ToArray();
+
+    OverlayStatus IOverlayController.Start(OverlayRequest request) =>
+        Start(request.Vhost, request.App, request.Stream, request.Fps, request.BitrateKbps, request.LabelScale, request.AnalyzerId);
 
     public void Dispose()
     {
@@ -266,24 +256,26 @@ public sealed class YoloOverlayManager : IDisposable
 }
 
 /// <summary>一路叠加流的 ffmpeg 解码 → 绘制 → 编码管线。</summary>
-internal sealed class YoloOverlaySession : IDisposable
+internal sealed class OverlaySession : IDisposable
 {
     private static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(2);
 
     private readonly StreamKey _key;
     private readonly int _sourceWidth;
     private readonly int _sourceHeight;
-    private readonly YoloResultStore _store;
+    private readonly OverlayResultCache _results;
+    private readonly OverlayComposer _composer;
+    private readonly string? _analyzerId;
     private readonly string _ffmpegPath;
     private readonly string _inputUrl;
     private readonly string _outputUrl;
+    private readonly string _overlayStream;
     private readonly int _width;
     private readonly int _height;
     private readonly int _fps;
     private readonly int _bitrateKbps;
-    private readonly int _labelScale;
     private readonly int _frameSize;
-    private readonly TimeSpan _detectionMaxAge;
+    private readonly TimeSpan _resultMaxAge;
     private readonly ILogger? _logger;
 
     private readonly Process _decoder = new();
@@ -296,40 +288,45 @@ internal sealed class YoloOverlaySession : IDisposable
 
     private Task? _pump;
     private long _frames;
-    private volatile YoloOverlayState _state = YoloOverlayState.Starting;
+    private volatile OverlayState _state = OverlayState.Starting;
     private string? _error;
     private int _disposed;
 
-    public YoloOverlaySession(
+    public OverlaySession(
         StreamKey key,
         int sourceWidth,
         int sourceHeight,
-        YoloResultStore store,
+        OverlayResultCache results,
+        OverlayComposer composer,
+        string? analyzerId,
         string ffmpegPath,
         string inputUrl,
         string outputUrl,
+        string overlayStream,
         int width,
         int height,
         int fps,
         int bitrateKbps,
         int labelScale,
-        TimeSpan detectionMaxAge,
+        TimeSpan resultMaxAge,
         ILogger? logger)
     {
         _key = key;
         _sourceWidth = sourceWidth;
         _sourceHeight = sourceHeight;
-        _store = store;
+        _results = results;
+        _composer = composer;
+        _analyzerId = analyzerId;
         _ffmpegPath = ffmpegPath;
         _inputUrl = inputUrl;
         _outputUrl = outputUrl;
+        _overlayStream = overlayStream;
         _width = width;
         _height = height;
         _fps = fps;
         _bitrateKbps = bitrateKbps;
-        _labelScale = labelScale;
         _frameSize = checked(width * height * 3);
-        _detectionMaxAge = detectionMaxAge;
+        _resultMaxAge = resultMaxAge;
         _logger = logger;
     }
 
@@ -347,19 +344,19 @@ internal sealed class YoloOverlaySession : IDisposable
             throw;
         }
 
-        _state = YoloOverlayState.Running;
+        _state = OverlayState.Running;
         _pump = Task.Run(() => PumpAsync(_cts.Token));
     }
 
-    public YoloOverlayStatus Snapshot()
+    public OverlayStatus Snapshot()
     {
         var error = CurrentError();
 
-        return new YoloOverlayStatus(
+        return new OverlayStatus(
             _key.Vhost,
             _key.App,
             _key.Stream,
-            YoloOverlayManager.OverlayStreamName(_key.Stream),
+            _overlayStream,
             _inputUrl,
             _outputUrl,
             _state,
@@ -393,7 +390,7 @@ internal sealed class YoloOverlaySession : IDisposable
         KillProcess(_decoder);
         KillProcess(_encoder);
 
-        _state = YoloOverlayState.Stopped;
+        _state = OverlayState.Stopped;
         _decoder.Dispose();
         _encoder.Dispose();
         _cts.Dispose();
@@ -420,7 +417,7 @@ internal sealed class YoloOverlaySession : IDisposable
                     break;
                 }
 
-                Draw(buffer.AsSpan(0, _frameSize), stride);
+                Draw(buffer, stride);
 
                 await stdin.WriteAsync(buffer.AsMemory(0, _frameSize), cancellationToken).ConfigureAwait(false);
                 await stdin.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -433,7 +430,7 @@ internal sealed class YoloOverlaySession : IDisposable
         catch (Exception exception)
         {
             SetError($"叠加流管线异常：{exception.Message}");
-            _logger?.LogWarning(exception, "YOLO 叠加流管线异常 {Key}", _key);
+            _logger?.LogWarning(exception, "结果叠加流管线异常 {Key}", _key);
         }
         finally
         {
@@ -441,25 +438,35 @@ internal sealed class YoloOverlaySession : IDisposable
         }
     }
 
-    private void Draw(Span<byte> frame, int stride)
+    private void Draw(byte[] buffer, int stride)
     {
-        var snapshot = _store.Get(_key.Vhost, _key.App, _key.Stream);
-        if (snapshot is null || snapshot.Objects.Count == 0)
+        var results = _results.List(_key);
+        if (results.Count == 0)
         {
             return;
         }
 
-        if (snapshot.Width != _sourceWidth || snapshot.Height != _sourceHeight)
+        // 与解码管线共用同一块缓冲（RgbImage 只是包装，不拷贝），渲染器直接写回
+        var image = new RgbImage(buffer, _width, _height, stride);
+        foreach (var result in results)
         {
-            return;
-        }
+            if (_analyzerId is { Length: > 0 } && !string.Equals(result.AnalyzerId, _analyzerId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
 
-        if (DateTimeOffset.UtcNow - snapshot.At > _detectionMaxAge)
-        {
-            return;
-        }
+            if (result.Width != _sourceWidth || result.Height != _sourceHeight)
+            {
+                continue;
+            }
 
-        FrameOverlay.DrawDetections(frame, _width, _height, stride, snapshot.Objects, _labelScale);
+            if (DateTimeOffset.UtcNow - result.At > _resultMaxAge)
+            {
+                continue;
+            }
+
+            _composer.Render(image, result);
+        }
     }
 
     private async Task ShutdownProcessesAsync(CancellationToken cancellationToken)
@@ -484,7 +491,7 @@ internal sealed class YoloOverlaySession : IDisposable
 
         if (cancelled)
         {
-            _state = YoloOverlayState.Stopped;
+            _state = OverlayState.Stopped;
             return;
         }
 
@@ -504,9 +511,9 @@ internal sealed class YoloOverlaySession : IDisposable
         }
 
         var error = CurrentError();
-        _state = error is null ? YoloOverlayState.Stopped : YoloOverlayState.Failed;
+        _state = error is null ? OverlayState.Stopped : OverlayState.Failed;
         _logger?.LogInformation(
-            "YOLO 叠加流结束 {Key}：state={State} frames={Frames} error={Error}",
+            "结果叠加流结束 {Key}：state={State} frames={Frames} error={Error}",
             _key,
             _state,
             Interlocked.Read(ref _frames),
@@ -607,7 +614,7 @@ internal sealed class YoloOverlaySession : IDisposable
                     _lastStderr[tag] = line;
                 }
 
-                _logger?.LogDebug("YOLO 叠加流 ffmpeg[{Tag}] {Line}", tag, line);
+                _logger?.LogDebug("结果叠加流 ffmpeg[{Tag}] {Line}", tag, line);
             }
         }
         catch (Exception)

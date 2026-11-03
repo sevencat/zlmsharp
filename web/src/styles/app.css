@@ -299,6 +299,29 @@ pre.json {
   word-break: break-all;
 }
 
+/* 播放弹窗：压缩 Buefy modal-card 默认的粗边框留白 */
+.player-modal .modal-card-head {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.player-modal .modal-card-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.player-modal .modal-card-body {
+  padding: 8px;
+}
+
+.player-modal .flv-player video {
+  border-radius: 4px;
+}
+
+.player-modal .flv-player .hint {
+  margin: 4px 0 0;
+}
+
 /* 请求日志抽屉 */
 .app-log {
   border-top: 1px solid var(--border);

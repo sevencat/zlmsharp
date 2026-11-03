@@ -1,7 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using ZlmSharp.Ai;
 
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Yolo;
 
 /// <summary>
 /// 推理会话的宿主：首次使用某个模型时才加载（懒加载），之后按模型路径缓存复用。

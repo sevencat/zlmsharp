@@ -51,7 +51,7 @@ const stopRecord = (item: MediaInfo) =>
   run('停止录像', () => call('stopRecord', { app: item.app, stream: item.stream }))
 
 const startOverlay = (item: MediaInfo) =>
-  run('YOLO 叠加', () => call('startYoloOverlay', { app: item.app, stream: item.stream }))
+  run('AI 叠加', () => call('startOverlay', { app: item.app, stream: item.stream }))
 
 const closeStream = (item: MediaInfo) =>
   run('关闭流', () => call('close_streams', { app: item.app, stream: item.stream }))
@@ -111,7 +111,7 @@ const closeStream = (item: MediaInfo) =>
                 <b-button size="is-small" icon-left="play" @click="play(item)">播放</b-button>
                 <b-button size="is-small" :loading="busy === '开始录像'" @click="startRecord(item)">录像</b-button>
                 <b-button size="is-small" :loading="busy === '停止录像'" @click="stopRecord(item)">停录</b-button>
-                <b-button size="is-small" icon-left="robot" :loading="busy === 'YOLO 叠加'" @click="startOverlay(item)">叠加</b-button>
+                <b-button size="is-small" icon-left="robot" :loading="busy === 'AI 叠加'" @click="startOverlay(item)">叠加</b-button>
                 <b-button size="is-small" type="is-danger is-light" :loading="busy === '关闭流'" @click="closeStream(item)">关闭</b-button>
               </td>
             </tr>
@@ -122,7 +122,7 @@ const closeStream = (item: MediaInfo) =>
     </section>
 
     <b-modal v-model="playActive" has-modal-card :can-cancel="true">
-      <div class="modal-card" style="width: auto; max-width: 960px">
+      <div class="modal-card player-modal" style="width: auto; max-width: 960px">
         <header class="modal-card-head">
           <p class="modal-card-title">
             {{ playing ? streamLabel(playing) : '' }}

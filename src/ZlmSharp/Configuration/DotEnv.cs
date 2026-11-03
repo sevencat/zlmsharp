@@ -231,5 +231,15 @@ public static class DefaultEnv
         ZLM_YOLO_CPU_THREADS=0
         # 同一路流两次检测的最小间隔（毫秒）；0 表示不限速
         ZLM_YOLO_SAMPLE_INTERVAL_MS=1000
+        #
+        # AI 分析扩展（ZlmSharp.Extra）通用配置
+        # 分析调度总开关：0 = 关闭定时分析与叠加（单图分析不受影响）
+        ZLM_EXTRA_ENABLE=1
+        # 全局采样间隔（毫秒）；未配置时沿用 ZLM_YOLO_SAMPLE_INTERVAL_MS
+        ZLM_ANALYSIS_SAMPLE_INTERVAL_MS=1000
+        # 分析器白名单（逗号分隔，如 yolo,ocr）；留空 = 全部已注册分析器
+        ZLM_ANALYSIS_ENABLED=
+        # 结果叠加流的后缀（{stream}_ai）；改后缀时请同步客户端播放地址
+        ZLM_OVERLAY_SUFFIX=_ai
         """;
 }

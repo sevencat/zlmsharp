@@ -1,4 +1,6 @@
-namespace ZlmSharp.Ai;
+using ZlmSharp.Extra.Yolo;
+
+namespace ZlmSharp.Extra.Overlay;
 
 /// <summary>
 /// 在 RGB24 帧上画检测框和标签（纯托管、无字体/图形库依赖）。

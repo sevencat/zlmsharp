@@ -1,4 +1,4 @@
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Yolo;
 
 /// <summary>
 /// 轻量 IoU 目标跟踪：按类别做贪心匹配，给检测框分配跨帧稳定的 <see cref="YoloObject.TrackId"/>。
@@ -6,7 +6,7 @@ namespace ZlmSharp.Ai;
 /// <remarks>
 /// 只做「同类别 + IoU ≥ 阈值」的贪心匹配（按 IoU 从大到小占用），不做卡尔曼/匈牙利，
 /// 目的是让叠加标签有稳定序号、减少闪烁，不用于轨迹分析。
-/// 实例不是线程安全的：一路流一个实例（<see cref="StreamYoloMonitor"/> 按流持有）。
+/// 实例不是线程安全的：一路流一个实例（<see cref="YoloAnalyzer"/> 按流持有）。
 /// </remarks>
 public sealed class ObjectTracker
 {

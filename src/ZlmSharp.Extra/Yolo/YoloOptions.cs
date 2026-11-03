@@ -1,6 +1,7 @@
+using ZlmSharp.Ai;
 using ZlmSharp.Configuration;
 
-namespace ZlmSharp.Ai;
+namespace ZlmSharp.Extra.Yolo;
 
 /// <summary>YOLO 推理参数（来自 <c>.env</c>，模型路径为空即关闭）。</summary>
 public sealed class YoloOptions

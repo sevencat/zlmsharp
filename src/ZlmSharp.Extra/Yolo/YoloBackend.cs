@@ -1,4 +1,6 @@
-namespace ZlmSharp.Ai;
+using ZlmSharp.Ai;
+
+namespace ZlmSharp.Extra.Yolo;
 
 /// <summary>喂给推理后端的参数（与具体后端实现无关）。</summary>
 public sealed record YoloBackendOptions

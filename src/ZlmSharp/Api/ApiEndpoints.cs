@@ -19,12 +19,14 @@ namespace ZlmSharp.Api;
 /// <summary>
 /// <c>/index/api/*</c> 端点：version / getApiList / getMediaList / close_streams / getSessionList / kick_session /
 /// yoloInfo / yoloDetect / getYoloResult / startYoloOverlay / stopYoloOverlay / getYoloOverlay /
+/// getAnalyzerList / analyzeDetect / analyzeResult / startOverlay / stopOverlay / getOverlay /
 /// startRecord / stopRecord / isRecording / startPush / stopPush / getPushList / addStreamProxy / delStreamProxy。
 /// 返回体与 ZLM 保持一致（<c>code</c>/<c>msg</c>/<c>data</c> 字段）。
 /// </summary>
 public static class ApiEndpoints
 {
-    private const int MaxYoloImageBytes = 32 * 1024 * 1024;
+    private const int MaxAnalysisImageBytes = 32 * 1024 * 1024;
+    private const string YoloAnalyzerId = "yolo";
 
     private static readonly string[] ImplementedApis =
     [
@@ -39,10 +41,15 @@ public static class ApiEndpoints
         "/index/api/yoloInfo",
         "/index/api/yoloDetect",
         "/index/api/getYoloResult",
+        "/index/api/getAnalyzerList",
+        "/index/api/analyzeDetect",
         "/index/api/analyzeResult",
         "/index/api/startYoloOverlay",
         "/index/api/stopYoloOverlay",
         "/index/api/getYoloOverlay",
+        "/index/api/startOverlay",
+        "/index/api/stopOverlay",
+        "/index/api/getOverlay",
         "/index/api/startRecord",
         "/index/api/stopRecord",
         "/index/api/isRecording",
@@ -51,16 +58,17 @@ public static class ApiEndpoints
         "/index/api/getPushList",
         "/index/api/addStreamProxy",
         "/index/api/delStreamProxy",
+        "/index/api/getProxyList",
     ];
 
     public static void Map(IEndpointRouteBuilder endpoints, AppOptions options, ApiVersionInfo version)
     {
         var registry = endpoints.ServiceProvider.GetRequiredService<MediaSourceRegistry>();
         var sessions = endpoints.ServiceProvider.GetService<MediaSessionRegistry>();
-        var detector = endpoints.ServiceProvider.GetService<YoloDetectorService>();
-        var yoloStore = endpoints.ServiceProvider.GetService<YoloResultStore>();
+        var catalog = endpoints.ServiceProvider.GetService<IAnalyzerCatalog>();
+        var imageAnalysis = endpoints.ServiceProvider.GetService<IImageAnalysisService>();
         var analyses = endpoints.ServiceProvider.GetService<AnalysisResultStore>();
-        var overlays = endpoints.ServiceProvider.GetService<YoloOverlayManager>();
+        var overlays = endpoints.ServiceProvider.GetService<IOverlayController>();
         var recorder = endpoints.ServiceProvider.GetService<RecorderManager>();
         var recordFiles = endpoints.ServiceProvider.GetService<RecordFileService>();
         var pushes = endpoints.ServiceProvider.GetService<RtmpPushManager>();
@@ -73,13 +81,18 @@ public static class ApiEndpoints
         endpoints.MapGet("/index/api/getSessionList", (RequestDelegate)(context => SessionListAsync(context, options, sessions)));
         endpoints.MapGet("/index/api/kick_session", (RequestDelegate)(context => KickSessionAsync(context, options, sessions)));
         endpoints.MapPost("/index/api/kick_session", (RequestDelegate)(context => KickSessionAsync(context, options, sessions)));
-        endpoints.MapGet("/index/api/yoloInfo", (RequestDelegate)(context => YoloInfoAsync(context, options, detector)));
-        endpoints.MapPost("/index/api/yoloDetect", (RequestDelegate)(context => YoloDetectAsync(context, options, detector)));
-        endpoints.MapGet("/index/api/getYoloResult", (RequestDelegate)(context => YoloResultAsync(context, options, yoloStore)));
+        endpoints.MapGet("/index/api/yoloInfo", (RequestDelegate)(context => YoloInfoAsync(context, options, catalog)));
+        endpoints.MapPost("/index/api/yoloDetect", (RequestDelegate)(context => YoloDetectAsync(context, options, imageAnalysis, catalog)));
+        endpoints.MapGet("/index/api/getYoloResult", (RequestDelegate)(context => YoloResultAsync(context, options, analyses)));
+        endpoints.MapGet("/index/api/getAnalyzerList", (RequestDelegate)(context => AnalyzerListAsync(context, options, catalog)));
+        endpoints.MapPost("/index/api/analyzeDetect", (RequestDelegate)(context => AnalyzeDetectAsync(context, options, imageAnalysis)));
         endpoints.MapGet("/index/api/analyzeResult", (RequestDelegate)(context => AnalyzeResultAsync(context, options, analyses)));
-        endpoints.MapGet("/index/api/startYoloOverlay", (RequestDelegate)(context => StartYoloOverlayAsync(context, options, detector, overlays)));
+        endpoints.MapGet("/index/api/startYoloOverlay", (RequestDelegate)(context => StartYoloOverlayAsync(context, options, catalog, overlays)));
         endpoints.MapGet("/index/api/stopYoloOverlay", (RequestDelegate)(context => StopYoloOverlayAsync(context, options, overlays)));
         endpoints.MapGet("/index/api/getYoloOverlay", (RequestDelegate)(context => GetYoloOverlayAsync(context, options, overlays)));
+        endpoints.MapGet("/index/api/startOverlay", (RequestDelegate)(context => StartOverlayAsync(context, options, overlays)));
+        endpoints.MapGet("/index/api/stopOverlay", (RequestDelegate)(context => StopOverlayAsync(context, options, overlays)));
+        endpoints.MapGet("/index/api/getOverlay", (RequestDelegate)(context => GetOverlayAsync(context, options, overlays)));
         endpoints.MapGet("/index/api/startRecord", (RequestDelegate)(context => StartRecordAsync(context, options, recorder)));
         endpoints.MapGet("/index/api/stopRecord", (RequestDelegate)(context => StopRecordAsync(context, options, recorder)));
         endpoints.MapGet("/index/api/isRecording", (RequestDelegate)(context => IsRecordingAsync(context, options, recorder)));
@@ -90,6 +103,7 @@ public static class ApiEndpoints
         endpoints.MapGet("/index/api/getPushList", (RequestDelegate)(context => GetPushListAsync(context, options, pushes)));
         endpoints.MapGet("/index/api/addStreamProxy", (RequestDelegate)(context => AddStreamProxyAsync(context, options, proxies)));
         endpoints.MapGet("/index/api/delStreamProxy", (RequestDelegate)(context => DelStreamProxyAsync(context, options, proxies)));
+        endpoints.MapGet("/index/api/getProxyList", (RequestDelegate)(context => GetProxyListAsync(context, options, proxies, registry)));
     }
 
     /// <summary>拉流代理：把远端 rtmp 拉到本地 <c>vhost/app/stream</c>（也可用返回的 key 停止）。</summary>
@@ -179,8 +193,48 @@ public static class ApiEndpoints
         await WriteJsonAsync(context, new ApiProxyFlagResponse(0, new ApiProxyFlagData(flag)), ApiJsonContext.Default.ApiProxyFlagResponse);
     }
 
+    /// <summary>拉流代理列表（含源地址与在线状态），刷新页面后仍可恢复。</summary>
+    private static async Task GetProxyListAsync(
+        HttpContext context,
+        AppOptions options,
+        RtmpPullProxyManager? proxies,
+        MediaSourceRegistry? registry)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getProxyList");
+
+        var query = context.Request.Query;
+        ApiProxyData[] data = proxies is null
+            ? []
+            : proxies.List()
+                .Where(item =>
+                    (query["vhost"].Count == 0 || string.Equals(item.Key.Vhost, query["vhost"].ToString(), StringComparison.OrdinalIgnoreCase)) &&
+                    (query["app"].Count == 0 || string.Equals(item.Key.App, query["app"].ToString(), StringComparison.OrdinalIgnoreCase)) &&
+                    (query["stream"].Count == 0 || string.Equals(item.Key.Stream, query["stream"].ToString(), StringComparison.OrdinalIgnoreCase)))
+                .Select(item => ToApiProxy(item, registry))
+                .OrderBy(item => item.Key)
+                .ToArray();
+
+        await WriteJsonAsync(context, new ApiProxyListResponse(0, data), ApiJsonContext.Default.ApiProxyListResponse);
+    }
+
+    private static ApiProxyData ToApiProxy(RtmpProxyInfo info, MediaSourceRegistry? registry) => new(
+        info.Key.ToString(),
+        info.Key.Vhost,
+        info.Key.App,
+        info.Key.Stream,
+        info.Url,
+        // “在线”= 本地流已收到视频数据；拉流重连中为 false
+        registry?.Find(info.Key.Vhost, info.Key.App, info.Key.Stream) is { IsClosed: false } source && source.Video.Ready,
+        info.StartedAt.ToUnixTimeSeconds(),
+        (long)Math.Max(0, (DateTimeOffset.UtcNow - info.StartedAt).TotalMilliseconds));
+
     /// <summary>查询定时检测结果（每路流只保留最近一次）。</summary>
-    private static async Task YoloResultAsync(HttpContext context, AppOptions options, YoloResultStore? store)
+    private static async Task YoloResultAsync(HttpContext context, AppOptions options, AnalysisResultStore? store)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -189,50 +243,140 @@ public static class ApiEndpoints
 
         LogRequest(context, options, "getYoloResult");
 
-        if (store is null)
-        {
-            await WriteJsonAsync(context, new ApiYoloResultResponse(0, []), ApiJsonContext.Default.ApiYoloResultResponse);
-            return;
-        }
-
         var now = DateTimeOffset.UtcNow;
-        var snapshots = store.List(
-            context.Request.Query["vhost"].ToString(),
-            context.Request.Query["app"].ToString(),
-            context.Request.Query["stream"].ToString());
+        var results = store is null
+            ? []
+            : store.List(
+                context.Request.Query["vhost"].ToString(),
+                context.Request.Query["app"].ToString(),
+                context.Request.Query["stream"].ToString(),
+                YoloAnalyzerId);
 
-        var data = new List<ApiYoloSnapshot>(snapshots.Count);
-        foreach (var snapshot in snapshots)
+        var data = new List<ApiYoloSnapshot>(results.Count);
+        foreach (var result in results)
         {
-            var objects = new List<ApiYoloObject>(snapshot.Objects.Count);
-            foreach (var item in snapshot.Objects)
+            var objects = new List<ApiYoloObject>(result.Primitives.Count);
+            foreach (var primitive in result.Primitives)
             {
-                objects.Add(new ApiYoloObject(
-                    item.ClassId,
-                    item.ClassName,
-                    item.Confidence,
-                    item.X,
-                    item.Y,
-                    item.Width,
-                    item.Height,
-                    item.TrackId));
+                if (ToYoloObject(primitive) is { } item)
+                {
+                    objects.Add(item);
+                }
             }
 
             data.Add(new ApiYoloSnapshot(
-                snapshot.Vhost,
-                snapshot.App,
-                snapshot.Stream,
-                snapshot.At.ToUnixTimeSeconds(),
-                (long)Math.Max(0, (now - snapshot.At).TotalMilliseconds),
-                snapshot.ElapsedMs,
-                snapshot.Width,
-                snapshot.Height,
+                result.Key.Vhost,
+                result.Key.App,
+                result.Key.Stream,
+                result.At.ToUnixTimeSeconds(),
+                (long)Math.Max(0, (now - result.At).TotalMilliseconds),
+                result.ElapsedMs,
+                result.Width,
+                result.Height,
                 objects.Count,
                 objects,
-                snapshot.Error));
+                result.Error));
         }
 
         await WriteJsonAsync(context, new ApiYoloResultResponse(0, data), ApiJsonContext.Default.ApiYoloResultResponse);
+    }
+
+    /// <summary>分析器清单（含第三方接入的算法）：模型、类别、就绪状态。</summary>
+    private static async Task AnalyzerListAsync(HttpContext context, AppOptions options, IAnalyzerCatalog? catalog)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getAnalyzerList");
+
+        var data = catalog is null
+            ? []
+            : catalog.List().Select(ToApiAnalyzer).ToArray();
+
+        await WriteJsonAsync(context, new ApiAnalyzerListResponse(0, data), ApiJsonContext.Default.ApiAnalyzerListResponse);
+    }
+
+    /// <summary>
+    /// 通用单图分析：<c>analyzer=</c> 指定分析器，body 为 P6 PPM 图片，或用 <c>url</c> 参数指定流地址（ffmpeg 抓一帧）。
+    /// </summary>
+    private static async Task AnalyzeDetectAsync(HttpContext context, AppOptions options, IImageAnalysisService? imageAnalysis)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "analyzeDetect");
+
+        if (imageAnalysis is null)
+        {
+            await WriteJsonAsync(context, new ApiErrorResponse(-1, "AI 分析未接入：请注册 ZlmSharp.Extra"), ApiJsonContext.Default.ApiErrorResponse);
+            return;
+        }
+
+        var query = context.Request.Query;
+        var analyzer = query["analyzer"].ToString();
+        if (analyzer.Length == 0)
+        {
+            await WriteJsonAsync(context, new ApiErrorResponse(-1, "请提供 analyzer 参数"), ApiJsonContext.Default.ApiErrorResponse);
+            return;
+        }
+
+        var cancellationToken = context.RequestAborted;
+        var request = new ImageAnalysisRequest(analyzer)
+        {
+            Model = NullIfEmpty(query["model"].ToString()),
+            SourceUrl = NullIfEmpty(query["url"].ToString()),
+        };
+
+        if (request.SourceUrl is null)
+        {
+            var body = await ReadBodyAsync(context, MaxAnalysisImageBytes, cancellationToken);
+            if (body is null)
+            {
+                await WriteJsonAsync(
+                    context,
+                    new ApiErrorResponse(-1, $"图片超过上限 {MaxAnalysisImageBytes / 1024 / 1024}MB"),
+                    ApiJsonContext.Default.ApiErrorResponse);
+                return;
+            }
+
+            if (body.Length == 0)
+            {
+                await WriteJsonAsync(
+                    context,
+                    new ApiErrorResponse(-1, "请提供 PPM 图片 body，或用 url 参数指定流地址"),
+                    ApiJsonContext.Default.ApiErrorResponse);
+                return;
+            }
+
+            request = request with { Image = body };
+        }
+
+        if (float.TryParse(
+                query["confidence"].ToString(),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsedConfidence))
+        {
+            request = request with { Confidence = parsedConfidence };
+        }
+
+        try
+        {
+            var result = await imageAnalysis.AnalyzeAsync(request, cancellationToken);
+            await WriteJsonAsync(
+                context,
+                new ApiAnalyzeDetectResponse(0, null, ToApiAnalysisData(result)),
+                ApiJsonContext.Default.ApiAnalyzeDetectResponse);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            GetLogger(context)?.LogWarning(exception, "单图分析失败（{Analyzer}）", analyzer);
+            await WriteJsonAsync(context, new ApiErrorResponse(-1, exception.Message), ApiJsonContext.Default.ApiErrorResponse);
+        }
     }
 
     /// <summary>通用分析结果：任意分析器（yolo / ocr / …）的最新快照，可用 <c>analyzer=</c> 过滤。</summary>
@@ -254,39 +398,10 @@ public static class ApiEndpoints
                 query["stream"].ToString(),
                 query["analyzer"].ToString());
 
-        var now = DateTimeOffset.UtcNow;
         var data = new List<ApiAnalysisData>(results.Count);
         foreach (var result in results)
         {
-            var primitives = new List<ApiAnalysisPrimitive>(result.Primitives.Count);
-            foreach (var item in result.Primitives)
-            {
-                primitives.Add(new ApiAnalysisPrimitive(
-                    item.Kind.ToString().ToLowerInvariant(),
-                    item.Label,
-                    item.Score,
-                    item.TrackId,
-                    item.X,
-                    item.Y,
-                    item.Width,
-                    item.Height,
-                    item.Points?.Select(point => new ApiAnalysisPoint(point.X, point.Y)).ToArray(),
-                    item.Text));
-            }
-
-            data.Add(new ApiAnalysisData(
-                result.AnalyzerId,
-                result.Key.Vhost,
-                result.Key.App,
-                result.Key.Stream,
-                result.At.ToUnixTimeSeconds(),
-                (long)Math.Max(0, (now - result.At).TotalMilliseconds),
-                result.ElapsedMs,
-                result.Width,
-                result.Height,
-                primitives.Count,
-                primitives,
-                result.Error));
+            data.Add(ToApiAnalysisData(result));
         }
 
         await WriteJsonAsync(
@@ -296,14 +411,14 @@ public static class ApiEndpoints
     }
 
     /// <summary>
-    /// 开始结果叠加：ffmpeg 解码源流 → 画框 → 编码推回本机 RTMP，输出 <c>{stream}_yolo</c>。
-    /// 可选 <c>fps</c>（默认源帧率或 25）、<c>bitrate</c>（kbps，默认 1500）、<c>scale</c>（标签缩放，默认 2）。
+    /// 开始结果叠加：ffmpeg 解码源流 → 绘制 → 编码推回本机 RTMP，输出 <c>{stream}_ai</c>。
+    /// 可选 <c>fps</c>（默认源帧率或 25）、<c>bitrate</c>（kbps，默认 1500）。
     /// </summary>
     private static async Task StartYoloOverlayAsync(
         HttpContext context,
         AppOptions options,
-        YoloDetectorService? detector,
-        YoloOverlayManager? overlays)
+        IAnalyzerCatalog? catalog,
+        IOverlayController? overlays)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -312,7 +427,8 @@ public static class ApiEndpoints
 
         LogRequest(context, options, "startYoloOverlay");
 
-        if (overlays is null || detector is null || !detector.Enabled)
+        var descriptor = catalog?.Get(YoloAnalyzerId);
+        if (overlays is null || descriptor is null || !descriptor.Enabled)
         {
             await WriteJsonAsync(
                 context,
@@ -321,9 +437,8 @@ public static class ApiEndpoints
             return;
         }
 
-        var app = context.Request.Query["app"].ToString();
-        var stream = context.Request.Query["stream"].ToString();
-        if (app.Length == 0 || stream.Length == 0)
+        var parameters = ReadOverlayParameters(context, "app 与 stream");
+        if (parameters is null)
         {
             await WriteJsonAsync(
                 context,
@@ -332,23 +447,12 @@ public static class ApiEndpoints
             return;
         }
 
-        var query = context.Request.Query;
-        int? fps = int.TryParse(query["fps"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedFps) && parsedFps > 0
-            ? parsedFps
-            : null;
-        var bitrate = int.TryParse(query["bitrate"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBitrate)
-            ? parsedBitrate
-            : 0;
-        var scale = int.TryParse(query["scale"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedScale)
-            ? parsedScale
-            : 2;
-
         try
         {
-            var status = overlays.Start(query["vhost"].ToString(), app, stream, fps, bitrate, scale);
+            var status = overlays.Start(parameters with { AnalyzerId = YoloAnalyzerId });
             await WriteJsonAsync(
                 context,
-                new ApiYoloOverlayResponse(0, null, ToApiOverlay(status)),
+                new ApiYoloOverlayResponse(0, null, ToApiYoloOverlay(status)),
                 ApiJsonContext.Default.ApiYoloOverlayResponse);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
@@ -360,7 +464,7 @@ public static class ApiEndpoints
         }
     }
 
-    private static async Task StopYoloOverlayAsync(HttpContext context, AppOptions options, YoloOverlayManager? overlays)
+    private static async Task StopYoloOverlayAsync(HttpContext context, AppOptions options, IOverlayController? overlays)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -369,19 +473,10 @@ public static class ApiEndpoints
 
         LogRequest(context, options, "stopYoloOverlay");
 
-        if (overlays is null)
-        {
-            await WriteJsonAsync(
-                context,
-                new ApiYoloOverlayFlagResponse(0, new ApiYoloOverlayFlagData(false)),
-                ApiJsonContext.Default.ApiYoloOverlayFlagResponse);
-            return;
-        }
-
-        var flag = overlays.Stop(
+        var flag = overlays?.Stop(
             context.Request.Query["vhost"].ToString(),
             context.Request.Query["app"].ToString(),
-            context.Request.Query["stream"].ToString());
+            context.Request.Query["stream"].ToString()) == true;
 
         await WriteJsonAsync(
             context,
@@ -389,7 +484,7 @@ public static class ApiEndpoints
             ApiJsonContext.Default.ApiYoloOverlayFlagResponse);
     }
 
-    private static async Task GetYoloOverlayAsync(HttpContext context, AppOptions options, YoloOverlayManager? overlays)
+    private static async Task GetYoloOverlayAsync(HttpContext context, AppOptions options, IOverlayController? overlays)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -398,14 +493,7 @@ public static class ApiEndpoints
 
         LogRequest(context, options, "getYoloOverlay");
 
-        ApiYoloOverlayData[] data = overlays is null
-            ? []
-            : overlays.List(
-                    context.Request.Query["vhost"].ToString(),
-                    context.Request.Query["app"].ToString(),
-                    context.Request.Query["stream"].ToString())
-                .Select(ToApiOverlay)
-                .ToArray();
+        ApiYoloOverlayData[] data = ListOverlays(context, overlays).Select(ToApiYoloOverlay).ToArray();
 
         await WriteJsonAsync(
             context,
@@ -413,7 +501,124 @@ public static class ApiEndpoints
             ApiJsonContext.Default.ApiYoloOverlayListResponse);
     }
 
-    private static ApiYoloOverlayData ToApiOverlay(YoloOverlayStatus status) => new(
+    /// <summary>通用叠加：用任意分析器（<c>analyzer=</c>，缺省全部）的最新结果绘制 <c>{stream}_ai</c>。</summary>
+    private static async Task StartOverlayAsync(HttpContext context, AppOptions options, IOverlayController? overlays)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "startOverlay");
+
+        if (overlays is null)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiOverlayResponse(-1, "AI 分析未接入：请注册 ZlmSharp.Extra", null),
+                ApiJsonContext.Default.ApiOverlayResponse);
+            return;
+        }
+
+        var parameters = ReadOverlayParameters(context, "app 与 stream");
+        if (parameters is null)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiOverlayResponse(-1, "请提供 app 与 stream 参数", null),
+                ApiJsonContext.Default.ApiOverlayResponse);
+            return;
+        }
+
+        try
+        {
+            var status = overlays.Start(parameters);
+            await WriteJsonAsync(
+                context,
+                new ApiOverlayResponse(0, null, ToApiOverlay(status)),
+                ApiJsonContext.Default.ApiOverlayResponse);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            await WriteJsonAsync(
+                context,
+                new ApiOverlayResponse(-1, exception.Message, null),
+                ApiJsonContext.Default.ApiOverlayResponse);
+        }
+    }
+
+    private static async Task StopOverlayAsync(HttpContext context, AppOptions options, IOverlayController? overlays)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "stopOverlay");
+
+        var flag = overlays?.Stop(
+            context.Request.Query["vhost"].ToString(),
+            context.Request.Query["app"].ToString(),
+            context.Request.Query["stream"].ToString()) == true;
+
+        await WriteJsonAsync(
+            context,
+            new ApiOverlayFlagResponse(0, new ApiOverlayFlagData(flag)),
+            ApiJsonContext.Default.ApiOverlayFlagResponse);
+    }
+
+    private static async Task GetOverlayAsync(HttpContext context, AppOptions options, IOverlayController? overlays)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getOverlay");
+
+        ApiOverlayData[] data = ListOverlays(context, overlays).Select(ToApiOverlay).ToArray();
+
+        await WriteJsonAsync(
+            context,
+            new ApiOverlayListResponse(0, data),
+            ApiJsonContext.Default.ApiOverlayListResponse);
+    }
+
+    private static IReadOnlyList<OverlayStatus> ListOverlays(HttpContext context, IOverlayController? overlays) =>
+        overlays?.List(
+                context.Request.Query["vhost"].ToString(),
+                context.Request.Query["app"].ToString(),
+                context.Request.Query["stream"].ToString())
+            ?? [];
+
+    private static OverlayRequest? ReadOverlayParameters(HttpContext context, string parameterName)
+    {
+        var app = context.Request.Query["app"].ToString();
+        var stream = context.Request.Query["stream"].ToString();
+        if (app.Length == 0 || stream.Length == 0)
+        {
+            return null;
+        }
+
+        var query = context.Request.Query;
+        int? fps = int.TryParse(query["fps"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedFps) && parsedFps > 0
+            ? parsedFps
+            : null;
+        var bitrate = int.TryParse(query["bitrate"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBitrate)
+            ? parsedBitrate
+            : 0;
+        var analyzer = NullIfEmpty(query["analyzer"].ToString());
+
+        return new OverlayRequest(query["vhost"].ToString(), app, stream)
+        {
+            AnalyzerId = analyzer,
+            Fps = fps,
+            BitrateKbps = bitrate,
+            LabelScale = 2,
+        };
+    }
+
+    private static ApiYoloOverlayData ToApiYoloOverlay(OverlayStatus status) => new(
         status.Vhost,
         status.App,
         status.Stream,
@@ -429,6 +634,101 @@ public static class ApiEndpoints
         status.StartedAt.ToUnixTimeSeconds(),
         (long)Math.Max(0, status.ElapsedMs),
         status.Error);
+
+    private static ApiOverlayData ToApiOverlay(OverlayStatus status) => new(
+        status.Vhost,
+        status.App,
+        status.Stream,
+        status.OverlayStream,
+        status.InputUrl,
+        status.OutputUrl,
+        status.State.ToString().ToLowerInvariant(),
+        status.Width,
+        status.Height,
+        status.Fps,
+        status.BitrateKbps,
+        status.Frames,
+        status.StartedAt.ToUnixTimeSeconds(),
+        (long)Math.Max(0, status.ElapsedMs),
+        status.Error);
+
+    private static ApiAnalyzerInfo ToApiAnalyzer(AnalyzerDescriptor descriptor) => new(
+        descriptor.Id,
+        descriptor.DisplayName,
+        descriptor.Enabled,
+        descriptor.Ready,
+        descriptor.Model ?? string.Empty,
+        descriptor.ModelDir ?? string.Empty,
+        descriptor.Device ?? string.Empty,
+        descriptor.Backend ?? string.Empty,
+        descriptor.Labels,
+        descriptor.AvailableModels,
+        descriptor.LoadedModels,
+        descriptor.Settings,
+        descriptor.Error);
+
+    private static ApiAnalysisData ToApiAnalysisData(AnalysisResult result)
+    {
+        var primitives = new List<ApiAnalysisPrimitive>(result.Primitives.Count);
+        foreach (var item in result.Primitives)
+        {
+            primitives.Add(new ApiAnalysisPrimitive(
+                item.Kind.ToString().ToLowerInvariant(),
+                item.Label,
+                item.Score,
+                item.TrackId,
+                item.X,
+                item.Y,
+                item.Width,
+                item.Height,
+                item.Points?.Select(point => new ApiAnalysisPoint(point.X, point.Y)).ToArray(),
+                item.Text));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        return new ApiAnalysisData(
+            result.AnalyzerId,
+            result.Key.Vhost,
+            result.Key.App,
+            result.Key.Stream,
+            result.At.ToUnixTimeSeconds(),
+            (long)Math.Max(0, (now - result.At).TotalMilliseconds),
+            result.ElapsedMs,
+            result.Width,
+            result.Height,
+            primitives.Count,
+            primitives,
+            result.Error);
+    }
+
+    /// <summary>Box 图元 → YOLO 兼容的检测框（classId 取 Attributes）。</summary>
+    private static ApiYoloObject? ToYoloObject(AnalysisPrimitive primitive)
+    {
+        if (primitive.Kind != AnalysisKind.Box ||
+            primitive.X is not { } x || primitive.Y is not { } y ||
+            primitive.Width is not { } width || primitive.Height is not { } height)
+        {
+            return null;
+        }
+
+        var classId = primitive.Attributes is { } attributes &&
+                      attributes.TryGetValue("classId", out var text) &&
+                      int.TryParse(text, out var id)
+            ? id
+            : -1;
+
+        return new ApiYoloObject(
+            classId,
+            primitive.Label,
+            (float)primitive.Score,
+            (float)x,
+            (float)y,
+            (float)width,
+            (float)height,
+            primitive.TrackId ?? 0);
+    }
+
+    private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
 
     /// <summary>
     /// 开始录像。<c>type</c>：1=MP4（默认）、2=FLV、3=两者；<c>max_second</c> 切片秒数（默认取 <c>protocol.mp4_max_second</c>）。
@@ -656,7 +956,7 @@ public static class ApiEndpoints
         Math.Max(0, status.ElapsedMs),
         status.Error);
 
-    private static async Task YoloInfoAsync(HttpContext context, AppOptions options, YoloDetectorService? detector)
+    private static async Task YoloInfoAsync(HttpContext context, AppOptions options, IAnalyzerCatalog? catalog)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -665,7 +965,9 @@ public static class ApiEndpoints
 
         LogRequest(context, options, "yoloInfo");
 
-        if (detector is null || (!detector.Enabled && detector.ModelDir.Length == 0))
+        var descriptor = catalog?.Get(YoloAnalyzerId);
+        if (catalog is null || descriptor is null ||
+            (!descriptor.Enabled && (descriptor.ModelDir?.Length ?? 0) == 0))
         {
             await WriteJsonAsync(
                 context,
@@ -674,34 +976,29 @@ public static class ApiEndpoints
             return;
         }
 
-        YoloModelSummary? summary = null;
-        if (detector.Enabled)
+        if (descriptor.Error is { Length: > 0 })
         {
-            summary = detector.ReadModelSummary();
-            if (summary is null)
-            {
-                await WriteJsonAsync(
-                    context,
-                    new ApiYoloInfoResponse(-1, $"无法读取 YOLO 模型（路径或格式不受支持）：{detector.ModelPath}", null),
-                    ApiJsonContext.Default.ApiYoloInfoResponse);
-                return;
-            }
+            await WriteJsonAsync(
+                context,
+                new ApiYoloInfoResponse(-1, $"{descriptor.Error}：{descriptor.Model}", null),
+                ApiJsonContext.Default.ApiYoloInfoResponse);
+            return;
         }
 
         var data = new ApiYoloInfoData(
-            detector.Enabled,
-            detector.Loaded,
-            detector.ModelPath,
-            detector.ModelDir,
-            detector.Device,
-            detector.Options.InputWidth,
-            detector.Options.InputHeight,
-            detector.Options.Confidence,
-            summary?.ClassCount ?? 0,
-            summary?.Task,
-            summary?.ClassNames ?? [],
-            detector.AvailableModels,
-            detector.LoadedModels);
+            descriptor.Enabled,
+            descriptor.Ready && descriptor.LoadedModels.Count > 0,
+            descriptor.Model ?? string.Empty,
+            descriptor.ModelDir ?? string.Empty,
+            descriptor.Device ?? string.Empty,
+            SettingInt(descriptor, "input_width", 640),
+            SettingInt(descriptor, "input_height", 640),
+            SettingFloat(descriptor, "confidence", 0.25f),
+            descriptor.Labels.Count,
+            SettingOrNull(descriptor, "task"),
+            descriptor.Labels,
+            descriptor.AvailableModels,
+            descriptor.LoadedModels);
 
         await WriteJsonAsync(context, new ApiYoloInfoResponse(0, null, data), ApiJsonContext.Default.ApiYoloInfoResponse);
     }
@@ -710,7 +1007,11 @@ public static class ApiEndpoints
     /// 检测一张图：body 为 P6 PPM 图片，或用 <c>url</c> 参数指定流地址（ffmpeg 抓一帧）；
     /// <c>confidence</c> 可覆盖默认阈值。
     /// </summary>
-    private static async Task YoloDetectAsync(HttpContext context, AppOptions options, YoloDetectorService? detector)
+    private static async Task YoloDetectAsync(
+        HttpContext context,
+        AppOptions options,
+        IImageAnalysisService? imageAnalysis,
+        IAnalyzerCatalog? catalog)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -719,7 +1020,9 @@ public static class ApiEndpoints
 
         LogRequest(context, options, "yoloDetect");
 
-        if (detector is null || (!detector.Enabled && detector.ModelDir.Length == 0))
+        var descriptor = catalog?.Get(YoloAnalyzerId);
+        if (imageAnalysis is null || descriptor is null ||
+            (!descriptor.Enabled && (descriptor.ModelDir?.Length ?? 0) == 0))
         {
             await WriteJsonAsync(
                 context,
@@ -729,103 +1032,56 @@ public static class ApiEndpoints
         }
 
         var cancellationToken = context.RequestAborted;
-        var url = context.Request.Query["url"].ToString();
-        var model = context.Request.Query["model"].ToString();
-
-        // 先校验模型名，避免白跑一次 ffmpeg 抽帧
-        try
+        var query = context.Request.Query;
+        var request = new ImageAnalysisRequest(YoloAnalyzerId)
         {
-            detector.ResolveModelPath(model);
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or FileNotFoundException)
-        {
-            await WriteJsonAsync(
-                context,
-                new ApiYoloDetectResponse(-1, exception.Message, null),
-                ApiJsonContext.Default.ApiYoloDetectResponse);
-            return;
-        }
+            Model = NullIfEmpty(query["model"].ToString()),
+            SourceUrl = NullIfEmpty(query["url"].ToString()),
+        };
 
-        RgbImage image;
-
-        try
+        if (request.SourceUrl is null)
         {
-            if (url.Length > 0)
+            var body = await ReadBodyAsync(context, MaxAnalysisImageBytes, cancellationToken);
+            if (body is null)
             {
-                image = await FfmpegFrameGrabber.GrabAsync(
-                    options.Env.ResolveFfmpegPath(),
-                    url,
-                    TimeSpan.FromSeconds(10),
-                    cancellationToken);
+                await WriteJsonAsync(
+                    context,
+                    new ApiYoloDetectResponse(-1, $"图片超过上限 {MaxAnalysisImageBytes / 1024 / 1024}MB", null),
+                    ApiJsonContext.Default.ApiYoloDetectResponse);
+                return;
             }
-            else
+
+            if (body.Length == 0)
             {
-                var body = await ReadBodyAsync(context, MaxYoloImageBytes, cancellationToken);
-                if (body is null)
-                {
-                    await WriteJsonAsync(
-                        context,
-                        new ApiYoloDetectResponse(-1, $"图片超过上限 {MaxYoloImageBytes / 1024 / 1024}MB", null),
-                        ApiJsonContext.Default.ApiYoloDetectResponse);
-                    return;
-                }
-
-                if (body.Length == 0)
-                {
-                    await WriteJsonAsync(
-                        context,
-                        new ApiYoloDetectResponse(-1, "请提供 P6 PPM 图片 body，或用 url 参数指定流地址", null),
-                        ApiJsonContext.Default.ApiYoloDetectResponse);
-                    return;
-                }
-
-                if (!PpmImage.TryParse(body, out var parsed, out var parseError))
-                {
-                    await WriteJsonAsync(
-                        context,
-                        new ApiYoloDetectResponse(-1, parseError, null),
-                        ApiJsonContext.Default.ApiYoloDetectResponse);
-                    return;
-                }
-
-                image = parsed;
+                await WriteJsonAsync(
+                    context,
+                    new ApiYoloDetectResponse(-1, "请提供 P6 PPM 图片 body，或用 url 参数指定流地址", null),
+                    ApiJsonContext.Default.ApiYoloDetectResponse);
+                return;
             }
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            GetLogger(context)?.LogWarning(exception, "YOLO 取帧失败: {Url}", url);
-            await WriteJsonAsync(
-                context,
-                new ApiYoloDetectResponse(-1, exception.Message, null),
-                ApiJsonContext.Default.ApiYoloDetectResponse);
-            return;
+
+            request = request with { Image = body };
         }
 
-        float? confidence = null;
         if (float.TryParse(
-                context.Request.Query["confidence"].ToString(),
+                query["confidence"].ToString(),
                 NumberStyles.Float,
                 CultureInfo.InvariantCulture,
                 out var parsedConfidence))
         {
-            confidence = parsedConfidence;
+            request = request with { Confidence = parsedConfidence };
         }
 
         try
         {
-            var result = await detector.DetectAsync(image, confidence, model, cancellationToken);
-            var objects = new List<ApiYoloObject>(result.Objects.Count);
-            foreach (var item in result.Objects)
+            var result = await imageAnalysis.AnalyzeAsync(request, cancellationToken);
+            var objects = new List<ApiYoloObject>(result.Primitives.Count);
+            foreach (var primitive in result.Primitives)
             {
-                objects.Add(new ApiYoloObject(
-                    item.ClassId,
-                    item.ClassName,
-                    item.Confidence,
-                    item.X,
-                    item.Y,
-                    item.Width,
-                    item.Height,
-                    item.TrackId));
+                if (ToYoloObject(primitive) is { } item)
+                {
+                    objects.Add(item);
+                }
             }
 
             var data = new ApiYoloDetectData(result.Width, result.Height, result.ElapsedMs, objects.Count, objects);
@@ -843,6 +1099,21 @@ public static class ApiEndpoints
                 ApiJsonContext.Default.ApiYoloDetectResponse);
         }
     }
+
+    private static int SettingInt(AnalyzerDescriptor descriptor, string key, int fallback) =>
+        descriptor.Settings.TryGetValue(key, out var text) &&
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
+
+    private static float SettingFloat(AnalyzerDescriptor descriptor, string key, float fallback) =>
+        descriptor.Settings.TryGetValue(key, out var text) &&
+        float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
+
+    private static string? SettingOrNull(AnalyzerDescriptor descriptor, string key) =>
+        descriptor.Settings.TryGetValue(key, out var text) && text.Length > 0 ? text : null;
 
     private static async Task<byte[]?> ReadBodyAsync(HttpContext context, int maxBytes, CancellationToken cancellationToken)
     {

@@ -101,6 +101,19 @@ public static class ConfigLoader
             env.YoloSampleIntervalMs,
             0,
             3_600_000);
+
+        var overlaySuffix = document.Get(EnvOptions.OverlaySuffixKey, string.Empty).Trim();
+        env.OverlaySuffix = overlaySuffix.Length > 0 ? overlaySuffix : "_ai";
+
+        // 未单独配置全局采样间隔时，沿用 YOLO 的采样间隔（兼容旧 .env）
+        env.AnalysisSampleIntervalMs = ParseInt(
+            document.Get(EnvOptions.AnalysisSampleIntervalMsKey, string.Empty),
+            env.YoloSampleIntervalMs,
+            0,
+            3_600_000);
+
+        env.AnalysisEnabled = document.Get(EnvOptions.AnalysisEnabledKey, string.Empty);
+        env.ExtraEnable = document.Get(EnvOptions.ExtraEnableKey, "1") is not ("0" or "false" or "off" or "no");
         env.Raw = new Dictionary<string, string>(document.Values, StringComparer.OrdinalIgnoreCase);
     }
 

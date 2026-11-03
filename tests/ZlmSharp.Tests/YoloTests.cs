@@ -1,6 +1,8 @@
 using System.Text;
 using ZlmSharp.Ai;
 using ZlmSharp.Configuration;
+using ZlmSharp.Extra.Capture;
+using ZlmSharp.Extra.Yolo;
 
 namespace ZlmSharp.Tests;
 
