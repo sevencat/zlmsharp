@@ -19,3 +19,4 @@ log/
 .idea
 /web/package-lock.json
 /simdyolo
+/publish-nuget.bat
