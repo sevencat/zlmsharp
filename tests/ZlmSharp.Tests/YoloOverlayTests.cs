@@ -2,6 +2,7 @@ using ZlmSharp.Ai;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
 using ZlmSharp.Extra.Analysis;
+using ZlmSharp.Extra.Media;
 using ZlmSharp.Extra.Overlay;
 using ZlmSharp.Extra.Yolo;
 
@@ -233,7 +234,12 @@ public class YoloOverlayTests
         options.Rtmp.Port = rtmpPort;
 
         registry = new MediaSourceRegistry();
-        return new YoloOverlayManager(registry, options, new OverlayResultCache(), OverlayComposer.Default());
+        return new YoloOverlayManager(
+            registry,
+            options,
+            new OverlayResultCache(),
+            OverlayComposer.Default(),
+            new FfmpegToolkit());
     }
 
     private static void AssertPixel(byte[] pixels, int width, int x, int y, (byte R, byte G, byte B) expected)

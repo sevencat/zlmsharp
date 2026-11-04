@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { call } from '../api'
+import { toast, toastError } from '../toast'
 import FlvPlayer from '../components/FlvPlayer.vue'
 import type { AnalysisData, AnalyzerInfo, OverlayState } from '../types'
 
@@ -25,8 +26,8 @@ async function guard(label: string, action: () => Promise<unknown>) {
   busy.value = label
   try {
     await action()
-  } catch {
-    // 失败详情已写入日志
+  } catch (error) {
+    toastError(error)
   } finally {
     busy.value = ''
   }
@@ -47,18 +48,20 @@ const loadOverlays = () => guard('overlay', async () => (overlays.value = await 
 
 const startOverlay = () =>
   guard('start', async () => {
-    await call('startOverlay', {
+    const status = await call<OverlayState>('startOverlay', {
       app: overlayForm.app,
       stream: overlayForm.stream,
       analyzer: overlayForm.analyzer || undefined,
       fps: overlayForm.fps || undefined,
     })
+    toast('success', `叠加流已启动：${status.overlayStream}`, 6000)
     await loadOverlays()
   })
 
 const stopOverlay = (item: OverlayState) =>
   guard(`stop-${item.overlayStream}`, async () => {
     await call('stopOverlay', { app: item.app, stream: item.stream })
+    toast('success', `已停止叠加：${item.overlayStream}`)
     await loadOverlays()
   })
 

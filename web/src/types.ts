@@ -78,6 +78,8 @@ export interface ProxyState {
   online: boolean
   startedAt: number
   elapsedMs: number
+  /** 没人看也不回收（常驻） */
+  keepOnNoneReader: boolean
 }
 
 export interface AnalyzerInfo {

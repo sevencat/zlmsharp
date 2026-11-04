@@ -333,7 +333,7 @@ public sealed class RtmpSession
         }
 
         // 先 OpenSource（内部会 CloseSource 注销旧会话），再登记新会话，避免刚注册就被清掉
-        OpenSource(key);
+        OpenSource(key, session?.Id);
         _publishSession = session;
         await SendStatusAsync("NetStream.Publish.Start", $"Start publishing {_key.Stream}", cancellationToken)
             .ConfigureAwait(false);
@@ -495,11 +495,29 @@ public sealed class RtmpSession
         return false;
     }
 
-    private void OpenSource(StreamKey key)
+    private void OpenSource(StreamKey key, string? selfSessionId)
     {
         CloseSource();
 
         _key = key;
+
+        // 同一 key 已有其它推流者（例如叠加流重启、转推重连）：先踢掉旧连接并摘掉它的 MediaSource，
+        // 否则两个会话共享同一个 source，旧连接断开时会把新连接正在写的流关掉，新流再也起不来。
+        var kicked = _sessions?.Kick(session =>
+            session.Type == MediaSessionType.Publisher &&
+            session.Key == key &&
+            session.Id != selfSessionId);
+        if (kicked is { Count: > 0 })
+        {
+            Log(RtmpLogLevel.Warning, $"RTMP 新推流顶替 {key}：踢掉旧发布者 {kicked.Count} 个会话");
+        }
+
+        if (_registry.TryGet(key, out var stale) && stale is not null)
+        {
+            _registry.Remove(key, stale);
+            Log(RtmpLogLevel.Info, $"RTMP 摘掉旧推流残留的流 {key}（新推流接管）");
+        }
+
         _source = _registry.GetOrCreate(_key, "rtmp");
         _ingest = new FlvFrameIngest(_source, Log);
         _publishing = true;
@@ -526,7 +544,8 @@ public sealed class RtmpSession
 
         var key = _key;
         _publishing = false;
-        _registry.Remove(key, out _);
+        // 实例匹配：同一 key 若已被新推流者接管，不能把它的 source 摘掉
+        _registry.Remove(key, source);
         Log(RtmpLogLevel.Info, $"RTMP 结束推流 {key}");
     }
 
@@ -586,6 +605,7 @@ public sealed class RtmpSession
         if (config is null)
         {
             ReleasePlaySession();
+            Log(RtmpLogLevel.Warning, $"RTMP 播放失败：流未就绪（缺少视频参数集）{key}");
             await SendStatusAsync("NetStream.Play.Failed", "流未就绪（缺少视频参数集）", cancellationToken, _playStreamId)
                 .ConfigureAwait(false);
             return;

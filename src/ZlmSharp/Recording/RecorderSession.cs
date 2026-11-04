@@ -162,7 +162,14 @@ internal sealed class RecorderSession : IDisposable
         {
         }
 
-        _sink?.Dispose();
+        if (_sink is not null)
+        {
+            // MediaSink.Dispose 不会把自己从 MediaSource 摘掉，必须显式移除；
+            // 否则 ReaderCount 永不归零，这路流再也不会被「无人观看回收」。
+            _source.RemoveReader(_sink);
+            _sink.Dispose();
+        }
+
         FinalizeSlice();
 
         try
@@ -222,6 +229,14 @@ internal sealed class RecorderSession : IDisposable
         finally
         {
             FinalizeSlice();
+
+            // 断流导致循环自然结束时也要摘掉 sink（Dispose 里会再摘一次，RemoveReader 幂等），
+            // 否则 ReaderCount 会一直大于 0，这路流永远进不了无人观看回收。
+            if (_sink is not null)
+            {
+                _source.RemoveReader(_sink);
+            }
+
             if (cancellationToken.IsCancellationRequested)
             {
                 _state = RecordingState.Stopped;

@@ -1,7 +1,7 @@
 using ZlmSharp.Ai;
 using ZlmSharp.Ai.Analysis;
-using ZlmSharp.Configuration;
 using ZlmSharp.Extra.Capture;
+using ZlmSharp.Extra.Media;
 
 namespace ZlmSharp.Extra.Analysis;
 
@@ -14,14 +14,14 @@ public sealed class AnalysisHost : IAnalyzerCatalog, IImageAnalysisService
     private static readonly TimeSpan GrabTimeout = TimeSpan.FromSeconds(10);
 
     private readonly AnalyzerRegistry _registry;
-    private readonly AppOptions _options;
+    private readonly IMediaToolkit _media;
 
-    public AnalysisHost(AnalyzerRegistry registry, AppOptions options)
+    public AnalysisHost(AnalyzerRegistry registry, IMediaToolkit media)
     {
         ArgumentNullException.ThrowIfNull(registry);
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(media);
         _registry = registry;
-        _options = options;
+        _media = media;
     }
 
     public IReadOnlyList<string> ImageFormats => ["ppm"];
@@ -53,11 +53,7 @@ public sealed class AnalysisHost : IAnalyzerCatalog, IImageAnalysisService
         RgbImage image;
         if (request.SourceUrl is { Length: > 0 } url)
         {
-            image = await FfmpegFrameGrabber.GrabAsync(
-                _options.Env.ResolveFfmpegPath(),
-                url,
-                GrabTimeout,
-                cancellationToken).ConfigureAwait(false);
+            image = await _media.GrabFrameAsync(url, GrabTimeout, cancellationToken).ConfigureAwait(false);
         }
         else if (request.Image is { } bytes)
         {

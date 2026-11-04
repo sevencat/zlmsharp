@@ -1,22 +1,36 @@
 using System.Diagnostics;
 using ZlmSharp.Core;
 using ZlmSharp.Extra.Capture;
+using ZlmSharp.Extra.Media;
 
 namespace ZlmSharp.Tests;
 
 /// <summary>
-/// 常驻解码器：不依赖 ffmpeg 的启动失败路径，以及需要本机 ffmpeg 的真实解码冒烟。
+/// 媒体工具抽象：不依赖 ffmpeg 的启动失败路径，以及需要本机 ffmpeg 的真实解码冒烟。
 /// 没有 ffmpeg 时（CI）真实解码用例直接跳过（返回）。
 /// </summary>
-public class FfmpegLiveDecoderTests
+public class FfmpegToolkitTests
 {
     [Fact]
-    public void Start_WithMissingBinary_Throws()
+    public void OpenSampler_WithMissingBinary_Throws()
     {
         var missing = Path.Combine(Path.GetTempPath(), $"no-ffmpeg-{Guid.NewGuid():N}.exe");
+        var toolkit = new FfmpegToolkit(missing);
 
         var exception = Assert.Throws<InvalidOperationException>(
-            () => FfmpegLiveDecoder.Start(missing, "rtsp://127.0.0.1/x", 320, 240));
+            () => toolkit.OpenSampler("rtsp://127.0.0.1/x", 320, 240));
+
+        Assert.Contains("ffmpeg", exception.Message);
+    }
+
+    [Fact]
+    public void OpenSink_WithMissingBinary_Throws()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"no-ffmpeg-{Guid.NewGuid():N}.exe");
+        var toolkit = new FfmpegToolkit(missing);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => toolkit.OpenSink(new FrameSinkOptions("rtmp://127.0.0.1/live/x", 320, 240, 25, 800)));
 
         Assert.Contains("ffmpeg", exception.Message);
     }
@@ -36,7 +50,7 @@ public class FfmpegLiveDecoderTests
             Assert.True(await CreateTestVideoAsync(ffmpeg, videoPath), "生成测试视频失败");
 
             var key = StreamKey.Create("__defaultVhost__", "live", "decoder-test");
-            await using var pool = new FfmpegDecoderPool(ffmpeg);
+            await using var pool = new FfmpegDecoderPool(new FfmpegToolkit(ffmpeg));
 
             var image = await pool.ReadFrameAsync(
                 key,
@@ -69,7 +83,7 @@ public class FfmpegLiveDecoderTests
     }
 
     [Fact]
-    public async Task Decoder_ReturnsLatestFrame_WithoutAccumulating()
+    public async Task Sampler_ReturnsLatestFrame_WithoutAccumulating()
     {
         var ffmpeg = FindFfmpeg();
         if (ffmpeg is null)
@@ -82,14 +96,14 @@ public class FfmpegLiveDecoderTests
         {
             Assert.True(await CreateTestVideoAsync(ffmpeg, videoPath), "生成测试视频失败");
 
-            await using var decoder = FfmpegLiveDecoder.Start(ffmpeg, videoPath, 160, 120);
-            var first = await decoder.ReadFrameAsync(TimeSpan.FromSeconds(15), CancellationToken.None);
+            await using var sampler = new FfmpegToolkit(ffmpeg).OpenSampler(videoPath, 160, 120);
+            var first = await sampler.ReadFrameAsync(TimeSpan.FromSeconds(15), CancellationToken.None);
             Assert.NotNull(first);
 
             // 连续取帧不应该抛出，且每次都是完整帧
             for (var index = 0; index < 3; index++)
             {
-                var next = await decoder.ReadFrameAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+                var next = await sampler.ReadFrameAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
                 if (next is null)
                 {
                     break; // 视频已 EOF，允许提前结束
@@ -99,6 +113,43 @@ public class FfmpegLiveDecoderTests
                 Assert.Equal(120, next.Height);
                 Assert.Equal(160 * 120 * 3, next.Pixels.Length);
             }
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(videoPath);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Reader_ReadsSequentialFrames_ToEnd()
+    {
+        var ffmpeg = FindFfmpeg();
+        if (ffmpeg is null)
+        {
+            return;
+        }
+
+        var videoPath = Path.Combine(Path.GetTempPath(), $"zlmsharp-reader-{Guid.NewGuid():N}.mp4");
+        try
+        {
+            Assert.True(await CreateTestVideoAsync(ffmpeg, videoPath), "生成测试视频失败");
+
+            await using var reader = new FfmpegToolkit(ffmpeg).OpenReader(videoPath, 80, 60);
+            var frame = new byte[80 * 60 * 3];
+            var frames = 0;
+
+            while (frames < 5 && await reader.ReadIntoAsync(frame, CancellationToken.None))
+            {
+                frames++;
+            }
+
+            Assert.True(frames > 0, "顺序读没有拿到任何帧");
         }
         finally
         {

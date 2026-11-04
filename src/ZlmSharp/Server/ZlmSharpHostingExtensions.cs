@@ -32,8 +32,12 @@ public static class ZlmSharpHostingExtensions
         services.AddSingleton(runtime.Options);
         services.AddSingleton(runtime.Document);
         services.AddSingleton(runtime.DotEnv);
-        services.AddSingleton<ZlmSharp.Core.MediaSourceRegistry>();
-        services.AddSingleton<ZlmSharp.Core.MediaSessionRegistry>();
+        // 管理页面授权：默认按 [api] pageToken 校验；宿主可注册自己的 IAdminPageAuthorizer 覆盖
+        services.TryAddSingleton<ZlmSharp.Server.IAdminPageAuthorizer, ZlmSharp.Server.StaticTokenPageAuthorizer>();
+        services.AddSingleton(provider => new ZlmSharp.Core.MediaSourceRegistry(
+            provider.GetService<ILoggerFactory>()?.CreateLogger("ZlmSharp.Media")));
+        services.AddSingleton(provider => new ZlmSharp.Core.MediaSessionRegistry(
+            provider.GetService<ILoggerFactory>()?.CreateLogger("ZlmSharp.Session")));
         services.AddSingleton<Hooks.MediaHookService>();
         services.AddSingleton<ZlmSharp.Core.MediaHookHandler>(provider =>
             provider.GetRequiredService<Hooks.MediaHookService>().InvokeAsync);
@@ -122,7 +126,10 @@ public static class ZlmSharpHostingExtensions
                     provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
                     provider.GetRequiredService<ZlmSharp.Core.MediaSessionRegistry>(),
                     provider.GetRequiredService<Hooks.MediaHookService>(),
-                    provider.GetRequiredService<ILoggerFactory>()));
+                    provider.GetRequiredService<ILoggerFactory>(),
+                    provider.GetService<ZlmSharp.Ai.IOverlayController>(),
+                    provider.GetService<ZlmSharp.Recording.RecorderManager>(),
+                    provider.GetService<ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager>()));
         }
 
         if (settings.RegisterStreamListeners)

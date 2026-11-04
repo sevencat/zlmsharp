@@ -133,6 +133,13 @@ public sealed class ApiOptions
 
     public string Secret { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 管理页面（<c>/zlm/admin</c>）访问令牌，默认空 = 不校验。
+    /// 设置后需带 <c>?token=xxx</c>（或请求头 <c>X-ZlmSharp-Token</c>）才能打开页面，
+    /// 校验通过会写入 <c>HttpOnly</c> cookie，后续刷新免带。
+    /// </summary>
+    public string PageToken { get; set; } = string.Empty;
+
     public string SnapRoot { get; set; } = "./www/snap/";
 
     public string DefaultSnap { get; set; } = "./www/logo.png";
@@ -249,6 +256,13 @@ public sealed class ProxyOptions
     /// url 支持 <c>rtmp://</c> 与 <c>rtsp://</c>。
     /// </summary>
     public string List { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 没人看时也不回收。默认关闭：普通代理没人看时按 <c>auto_close</c> / hook 回收（之后会自己重连）；
+    /// 打开后代理一直拉，拉不到就按 <c>retry_delay_ms</c> 重试，直到 <c>delStreamProxy</c>（或停服务）。
+    /// 该键是 <c>[proxy] list</c> 启动时的默认值，<c>addStreamProxy?keep=1</c> 可按单路指定。
+    /// </summary>
+    public bool KeepOnNoneReader { get; set; }
 }
 
 public sealed class LogOptions

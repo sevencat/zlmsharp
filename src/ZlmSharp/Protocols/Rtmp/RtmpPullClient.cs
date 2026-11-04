@@ -145,6 +145,14 @@ public static class RtmpPullClient
 
         while (true)
         {
+            // 本地流被关闭（close_streams / 回收 / 删除代理）：立即结束，
+            // 让上层 PullLoopAsync 重建 MediaSource 后重连；否则会一直往已关闭对象写帧。
+            if (source.IsClosed)
+            {
+                log?.Invoke(RtmpLogLevel.Info, $"本地流已关闭，结束 RTMP 拉流 {url}");
+                return;
+            }
+
             var message = await reader.ReadMessageAsync(network, cancellationToken).ConfigureAwait(false);
             if (message is null)
             {

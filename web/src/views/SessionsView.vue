@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { call, log } from '../api'
 import { seconds } from '../store'
+import { toast, toastError } from '../toast'
 import type { SessionInfo } from '../types'
 
 const sessions = ref<SessionInfo[]>([])
@@ -24,10 +25,11 @@ async function kick(item: SessionInfo) {
   busy.value = item.id
   try {
     await call('kick_session', { id: item.id })
+    toast('success', `已踢出会话 ${item.id}`)
     log('info', `已踢出会话 ${item.id}`)
     await load()
-  } catch {
-    // 同上
+  } catch (error) {
+    toastError(error, '踢出会话')
   } finally {
     busy.value = ''
   }

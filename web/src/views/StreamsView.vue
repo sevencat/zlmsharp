@@ -2,8 +2,9 @@
 import { computed, ref } from 'vue'
 import { call, log } from '../api'
 import { refresh, seconds, state, streamLabel } from '../store'
+import { toast, toastError } from '../toast'
 import FlvPlayer from '../components/FlvPlayer.vue'
-import type { MediaInfo, RecordState } from '../types'
+import type { MediaInfo, OverlayState, RecordState } from '../types'
 
 const keyword = ref('')
 const busy = ref('')
@@ -53,10 +54,11 @@ async function run(label: string, action: () => Promise<unknown>) {
   busy.value = label
   try {
     await action()
+    toast('success', `${label}成功`)
     log('info', `${label} 完成`)
     await refresh()
-  } catch {
-    // 失败详情已由 api 层写入日志
+  } catch (error) {
+    toastError(error, label)
   } finally {
     busy.value = ''
   }
@@ -67,16 +69,51 @@ const play = (item: MediaInfo) => {
 }
 
 const startRecord = (item: MediaInfo) =>
-  run('开始录像', () => call('startRecord', { app: item.app, stream: item.stream, type: recordFormat.value }))
+  run('开始录像', async () => {
+    const status = await call<RecordState>('startRecord', {
+      app: item.app,
+      stream: item.stream,
+      type: recordFormat.value,
+    })
+    const file = status.mp4Path ?? status.flvPath ?? status.hlsPath
+    if (file) {
+      toast('info', `录像文件：${file}`, 6000)
+    }
+  })
 
 const stopRecord = (item: MediaInfo) =>
   run('停止录像', () => call('stopRecord', { app: item.app, stream: item.stream }))
 
 const startOverlay = (item: MediaInfo) =>
-  run('AI 叠加', () => call('startOverlay', { app: item.app, stream: item.stream }))
+  run('AI 叠加', async () => {
+    const status = await call<OverlayState>('startOverlay', { app: item.app, stream: item.stream })
+    toast('info', `叠加流已启动：${status.overlayStream}`, 6000)
+  })
+
+/** 该行是某路叠加会话的输出流时返回会话（用会话里的源流名去停止） */
+const overlayOf = (item: MediaInfo) =>
+  state.overlays.find(
+    (overlay) => overlay.app === item.app && overlay.vhost === item.vhost && overlay.overlayStream === item.stream,
+  )
+
+const isProxy = (item: MediaInfo) => item.originType.toLowerCase() === 'proxy'
 
 const closeStream = (item: MediaInfo) =>
-  run('关闭流', () => call('close_streams', { app: item.app, stream: item.stream }))
+  run('关闭流', () => call('close_streams', { vhost: item.vhost, app: item.app, stream: item.stream }))
+
+/** 代理流只能停代理（close_streams 会跳过它） */
+const stopProxy = (item: MediaInfo) =>
+  run('停止拉流', () => call('delStreamProxy', { vhost: item.vhost, app: item.app, stream: item.stream }))
+
+/** 叠加流只能停叠加会话（close_streams 会跳过它） */
+const stopOverlay = (item: MediaInfo) =>
+  run('停止叠加', () => {
+    const overlay = overlayOf(item)
+    if (!overlay) {
+      throw new Error('叠加会话已结束，请刷新')
+    }
+    return call('stopOverlay', { vhost: overlay.vhost, app: overlay.app, stream: overlay.stream })
+  })
 </script>
 
 <template>
@@ -160,8 +197,34 @@ const closeStream = (item: MediaInfo) =>
                   :loading="busy === '开始录像'"
                   @click="startRecord(item)"
                 >录像</b-button>
-                <b-button size="is-small" icon-left="robot" :loading="busy === 'AI 叠加'" @click="startOverlay(item)">叠加</b-button>
-                <b-button size="is-small" type="is-danger is-light" :loading="busy === '关闭流'" @click="closeStream(item)">关闭</b-button>
+                <b-button
+                  size="is-small"
+                  icon-left="robot"
+                  :disabled="!!overlayOf(item)"
+                  :loading="busy === 'AI 叠加'"
+                  @click="startOverlay(item)"
+                >叠加</b-button>
+                <b-button
+                  v-if="isProxy(item)"
+                  size="is-small"
+                  type="is-danger is-light"
+                  :loading="busy === '停止拉流'"
+                  @click="stopProxy(item)"
+                >停止拉流</b-button>
+                <b-button
+                  v-else-if="overlayOf(item)"
+                  size="is-small"
+                  type="is-danger is-light"
+                  :loading="busy === '停止叠加'"
+                  @click="stopOverlay(item)"
+                >停止叠加</b-button>
+                <b-button
+                  v-else
+                  size="is-small"
+                  type="is-danger is-light"
+                  :loading="busy === '关闭流'"
+                  @click="closeStream(item)"
+                >关闭</b-button>
               </td>
             </tr>
             <tr v-if="rows.length === 0"><td colspan="9" class="empty">没有匹配的在线流</td></tr>

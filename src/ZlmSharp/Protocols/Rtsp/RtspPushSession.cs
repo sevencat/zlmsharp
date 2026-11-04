@@ -149,7 +149,7 @@ public sealed class RtspPushSession
         }
         catch (IOException exception)
         {
-            Log(RtspLogLevel.Debug, $"RTSP 推流连接中断: {exception.Message}");
+            Log(RtspLogLevel.Info, $"RTSP 推流连接中断 {_key}: {exception.Message}");
         }
         finally
         {
@@ -193,6 +193,23 @@ public sealed class RtspPushSession
         }
 
         _publishSession = session;
+
+        // 同一 key 已有其它推流者（例如叠加流重启、转推重连）：先踢掉旧连接并摘掉它的 MediaSource，
+        // 否则两个会话共享同一个 source，旧连接断开时会把新连接正在写的流关掉。
+        var kicked = _sessions?.Kick(item =>
+            item.Type == MediaSessionType.Publisher &&
+            item.Key == key &&
+            item.Id != session?.Id);
+        if (kicked is { Count: > 0 })
+        {
+            Log(RtspLogLevel.Warning, $"RTSP 新推流顶替 {key}：踢掉旧发布者 {kicked.Count} 个会话");
+        }
+
+        if (_registry.TryGet(key, out var stale) && stale is not null)
+        {
+            _registry.Remove(key, stale);
+            Log(RtspLogLevel.Info, $"RTSP 摘掉旧推流残留的流 {key}（新推流接管）");
+        }
 
         var source = _registry.GetOrCreate(key, "rtsp");
         _source = source;
@@ -1087,7 +1104,8 @@ public sealed class RtspPushSession
             return;
         }
 
-        _registry.Remove(_key, out _);
+        // 实例匹配：同一 key 若已被新推流者接管，不能把它的 source 摘掉
+        _registry.Remove(_key, source);
         Log(RtspLogLevel.Info, $"RTSP 结束推流 {_key}");
     }
 

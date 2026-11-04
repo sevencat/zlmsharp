@@ -13,6 +13,7 @@
 | 通用端点命名 | `getAnalyzerList` / `analyzeDetect` / `startOverlay` / `stopOverlay` / `getOverlay`；旧 yolo 端点全部保留兼容 |
 | 叠加流后缀 | 切换为 `_ai`（`ZLM_OVERLAY_SUFFIX` 可改回 `_yolo`）；前端通过 API 返回的 `overlayStream` 字段取名，无需改动 |
 | 插件目录扫描 | **暂不实现**（`ZlmSharp.Extra.Plugins` 未创建）；第三方以编译期引用 + `AddAnalyzer` 接入（AOT 友好），设计保留在 §8.3 供后续实施 |
+| ffmpeg/ffprobe 调用 | 已收敛到 `Media/IMediaToolkit` + `FfmpegToolkit`（抽帧 / 常驻解码「最新帧、顺序读」/ 常驻编码）；上层不再出现 `Process`，替换为进程内 libav 实现时只需换掉 `IMediaToolkit` 注册 |
 
 已实现清单：核心契约（`Ai/AnalyzerCatalog.cs`、`Ai/OverlayModels.cs`、`AnalysisModels.cs` 扩展）、`src/ZlmSharp.Extra`（Capture / Yolo / Overlay / Analysis 四个目录 + `ExtraBuilder`/`AddZlmSharpExtra`）、`AnalysisScheduler` 替代 `StreamYoloMonitor`、`OverlayResultCache`、新端点与 DTO、`.env` 模板新键、CLI 接入 Extra、README 与测试更新。
 
@@ -278,11 +279,12 @@ src/ZlmSharp.Extra/
     IExtraBuilder.cs / ExtraBuilder.cs   # 注册 DSL（分析器 / 渲染器 / sink / 后端）
     ExtraPlugin.cs                       # IExtraPlugin 契约（供插件 DLL 实现）
     PluginLoader.cs                      # 目录扫描 + AssemblyLoadContext（JIT）
+  Media/
+    IMediaToolkit.cs                     # ffmpeg/ffprobe 抽象：GrabFrameAsync / OpenSampler / OpenReader / OpenSink
+    FfmpegToolkit.cs                     # 进程实现（唯一的 Process 使用点）；将来可换 libav DLL 实现
   Capture/
-    IFrameSource.cs                      # Task<RgbImage?> TryGrabAsync(key, w, h, timeout, ct)
-    FfmpegFrameSource.cs                 # 基于 FfmpegDecoderPool 的常驻解码
-    FfmpegDecoderPool.cs / FfmpegLiveDecoder.cs / FfmpegFrameGrabber.cs
-    EncodedImageDecoder.cs               # PPM（现有）+ 可扩展 JPEG/PNG
+    FfmpegDecoderPool.cs                 # 基于 IMediaToolkit.OpenSampler 的常驻解码池
+    PpmImage.cs                          # PPM 解析（抽帧产物的解码）
   Analysis/
     AnalysisScheduler.cs                 # BackgroundService：采样 → 分析 → 分发结果
     AnalysisHost.cs                      # IAnalyzerCatalog / IImageAnalysisService 实现

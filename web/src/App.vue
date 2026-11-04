@@ -5,6 +5,7 @@ import { navItems } from './router'
 import { auth, clearLogs, logs, saveSecret } from './api'
 import { appIconUrl } from './branding'
 import { refresh, state, startPolling, stopPolling } from './store'
+import { toasts } from './toast'
 import AppIcon from './components/AppIcon.vue'
 
 const route = useRoute()
@@ -32,6 +33,12 @@ onBeforeUnmount(() => stopPolling())
 
 <template>
   <div class="app-shell">
+    <div class="toast-stack">
+      <div v-for="item in toasts.items" :key="item.id" class="toast-item" :class="`is-${item.type}`">
+        {{ item.message }}
+      </div>
+    </div>
+
     <aside class="app-side">
       <div class="brand">
         <img class="brand-logo" :src="appIconUrl" alt="zlmsharp" />

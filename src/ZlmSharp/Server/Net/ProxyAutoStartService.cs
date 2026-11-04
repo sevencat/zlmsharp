@@ -46,7 +46,7 @@ internal sealed class ProxyAutoStartService : IHostedService
         {
             try
             {
-                _manager.Start(key.Vhost, key.App, key.Stream, url);
+                _manager.Start(key.Vhost, key.App, key.Stream, url, proxy.KeepOnNoneReader);
                 started++;
             }
             catch (Exception exception)

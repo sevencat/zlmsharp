@@ -208,6 +208,7 @@ public sealed record ApiProxyData(
     string Url,
     bool Online,
     long StartedAt,
-    long ElapsedMs);
+    long ElapsedMs,
+    bool KeepOnNoneReader = false);
 
 public sealed record ApiProxyListResponse(int Code, IReadOnlyList<ApiProxyData> Data);

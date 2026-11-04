@@ -169,6 +169,61 @@ body {
   color: var(--muted);
 }
 
+/* 全局轻提示 */
+.toast-stack {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 440px;
+  pointer-events: none;
+}
+
+.toast-item {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #fff;
+  border-left: 3px solid var(--muted);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-all;
+  animation: toast-in 0.16s ease-out;
+}
+
+.toast-item.is-success {
+  border-left-color: #22c55e;
+  color: #14532d;
+  background: #f0fdf4;
+}
+
+.toast-item.is-error {
+  border-left-color: #ef4444;
+  color: #7f1d1d;
+  background: #fef2f2;
+}
+
+.toast-item.is-info {
+  border-left-color: var(--side-active);
+  color: #1e3a8a;
+  background: #eff6ff;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* 可点击的行内链接（录像目录等） */
 a.link {
   color: var(--side-active);

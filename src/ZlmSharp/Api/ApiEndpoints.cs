@@ -78,7 +78,7 @@ public static class ApiEndpoints
         endpoints.MapGet("/index/api/version", (RequestDelegate)(context => VersionAsync(context, options, version)));
         endpoints.MapGet("/index/api/getApiList", (RequestDelegate)(context => ApiListAsync(context, options)));
         endpoints.MapGet("/index/api/getMediaList", (RequestDelegate)(context => MediaListAsync(context, options, registry)));
-        endpoints.MapGet("/index/api/close_streams", (RequestDelegate)(context => CloseStreamsAsync(context, options, registry)));
+        endpoints.MapGet("/index/api/close_streams", (RequestDelegate)(context => CloseStreamsAsync(context, options, registry, overlays)));
         endpoints.MapGet("/index/api/getSessionList", (RequestDelegate)(context => SessionListAsync(context, options, sessions)));
         endpoints.MapGet("/index/api/kick_session", (RequestDelegate)(context => KickSessionAsync(context, options, sessions)));
         endpoints.MapPost("/index/api/kick_session", (RequestDelegate)(context => KickSessionAsync(context, options, sessions)));
@@ -128,11 +128,16 @@ public static class ApiEndpoints
 
         try
         {
+            var query = context.Request.Query;
+
+            // 默认普通代理（没人看按 auto_close 回收）；显式 keep=1 才是常驻
+            var keep = ParseFlag(query["keep"].ToString()) || ParseFlag(query["keep_on_none_reader"].ToString());
             var key = proxies.Start(
-                context.Request.Query["vhost"].ToString(),
-                context.Request.Query["app"].ToString(),
-                context.Request.Query["stream"].ToString(),
-                context.Request.Query["url"].ToString());
+                query["vhost"].ToString(),
+                query["app"].ToString(),
+                query["stream"].ToString(),
+                query["url"].ToString(),
+                keep);
 
             await WriteJsonAsync(
                 context,
@@ -235,7 +240,8 @@ public static class ApiEndpoints
         // “在线”= 本地流已收到视频数据；拉流重连中为 false
         registry?.Find(info.Key.Vhost, info.Key.App, info.Key.Stream) is { IsClosed: false } source && source.Video.Ready,
         info.StartedAt.ToUnixTimeSeconds(),
-        (long)Math.Max(0, (DateTimeOffset.UtcNow - info.StartedAt).TotalMilliseconds));
+        (long)Math.Max(0, (DateTimeOffset.UtcNow - info.StartedAt).TotalMilliseconds),
+        info.KeepOnNoneReader);
 
     /// <summary>查询定时检测结果（每路流只保留最近一次）。</summary>
     private static async Task YoloResultAsync(HttpContext context, AppOptions options, AnalysisResultStore? store)
@@ -733,6 +739,13 @@ public static class ApiEndpoints
     }
 
     private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
+
+    /// <summary>解析查询串里的开关（<c>1</c> / <c>true</c> / <c>yes</c> / <c>on</c>），缺省为 false。</summary>
+    private static bool ParseFlag(string value) =>
+        value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("on", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// 开始录像。<c>type</c>：1=MP4（默认）、2=FLV、3=两者；<c>max_second</c> 切片秒数（默认取 <c>protocol.mp4_max_second</c>）。
@@ -1243,7 +1256,11 @@ public static class ApiEndpoints
         await WriteJsonAsync(context, new ApiMediaListResponse(0, data), ApiJsonContext.Default.ApiMediaListResponse);
     }
 
-    private static async Task CloseStreamsAsync(HttpContext context, AppOptions options, MediaSourceRegistry registry)
+    private static async Task CloseStreamsAsync(
+        HttpContext context,
+        AppOptions options,
+        MediaSourceRegistry registry,
+        IOverlayController? overlays)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -1265,6 +1282,14 @@ public static class ApiEndpoints
                 continue;
             }
 
+            // 受管流不从这里关闭（关掉后不会自愈）：
+            // 拉流代理由 RtmpPullProxyManager 持有，只能 delStreamProxy；
+            // 叠加流由叠加会话持有，只能 stopOverlay。
+            if (IsManagedStream(source, overlays))
+            {
+                continue;
+            }
+
             count++;
             registry.Remove(source.Key, out _);
         }
@@ -1274,6 +1299,14 @@ public static class ApiEndpoints
             new ApiCloseStreamsResponse(0, count, count > 0),
             ApiJsonContext.Default.ApiCloseStreamsResponse);
     }
+
+    /// <summary>
+    /// 受管流：拉流代理（<c>originType=proxy</c>）与叠加流的生命周期由各自管理器持有，
+    /// 只能通过 <c>delStreamProxy</c> / <c>stopOverlay</c> 结束，<c>close_streams</c> 跳过。
+    /// </summary>
+    private static bool IsManagedStream(MediaSource source, IOverlayController? overlays) =>
+        string.Equals(source.OriginType, "proxy", StringComparison.OrdinalIgnoreCase) ||
+        (overlays?.IsOverlayStream(source.Key.Stream) ?? false);
 
     /// <summary>录像文件浏览：<c>period</c> 为空返回日期目录列表，否则返回该日期下的文件。</summary>
     private static async Task GetRecordFileAsync(

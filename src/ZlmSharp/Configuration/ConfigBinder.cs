@@ -60,6 +60,7 @@ public static class ConfigBinder
         var api = options.Api;
         api.Debug = document.GetBool("api", "apiDebug", api.Debug);
         api.Secret = document.GetString("api", "secret", api.Secret);
+        api.PageToken = document.GetString("api", "pageToken", api.PageToken);
         api.SnapRoot = document.GetString("api", "snapRoot", api.SnapRoot);
         api.DefaultSnap = document.GetString("api", "defaultSnap", api.DefaultSnap);
         api.DownloadRoot = document.GetString("api", "downloadRoot", api.DownloadRoot);
@@ -93,6 +94,7 @@ public static class ConfigBinder
         proxy.MaxConcurrency = document.GetInt("proxy", "max_concurrency", proxy.MaxConcurrency);
         proxy.RetryDelayMS = document.GetInt("proxy", "retry_delay_ms", proxy.RetryDelayMS);
         proxy.List = document.GetString("proxy", "list", proxy.List);
+        proxy.KeepOnNoneReader = document.GetBool("proxy", "keep_on_none_reader", proxy.KeepOnNoneReader);
         proxy.MaxConcurrency = Math.Clamp(proxy.MaxConcurrency, 1, 256);
         proxy.RetryDelayMS = Math.Clamp(proxy.RetryDelayMS, 200, 60_000);
 

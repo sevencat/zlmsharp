@@ -4,7 +4,7 @@ using ZlmSharp.Protocols.Rtsp;
 
 namespace ZlmSharp.Protocols.Rtmp;
 
-public sealed record RtmpProxyInfo(StreamKey Key, string Url, DateTimeOffset StartedAt);
+public sealed record RtmpProxyInfo(StreamKey Key, string Url, DateTimeOffset StartedAt, bool KeepOnNoneReader);
 
 public enum PullProtocol
 {
@@ -46,9 +46,15 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
     public int Count => _entries.Count;
 
     public IReadOnlyList<RtmpProxyInfo> List() =>
-        _entries.Values.Select(entry => new RtmpProxyInfo(entry.Key, entry.Url, entry.StartedAt)).ToArray();
+        _entries.Values
+            .Select(entry => new RtmpProxyInfo(entry.Key, entry.Url, entry.StartedAt, entry.KeepOnNoneReader))
+            .ToArray();
 
     public bool IsPulling(StreamKey key) => _entries.ContainsKey(key);
+
+    /// <summary>这路代理是否设置成「没人看也不回收」。</summary>
+    public bool IsKeptOnNoneReader(StreamKey key) =>
+        _entries.TryGetValue(key, out var entry) && entry.KeepOnNoneReader;
 
     /// <summary>解析 <c>app/stream=url;vhost/app/stream=url</c> 形式的代理列表。</summary>
     public static IReadOnlyList<(StreamKey Key, string Url)> ParseList(string? list)
@@ -93,9 +99,13 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
     }
 
     /// <summary>开始（或重启）一路拉流代理，返回本地流标识。</summary>
+    /// <param name="keepOnNoneReader">
+    /// true = 用户指定的常驻代理：没人看也不回收，一直拉、拉不到就重试，直到 <c>delStreamProxy</c>；
+    /// false（默认）= 普通代理，按 <c>auto_close</c> / hook 正常回收（回收后自动重连）。
+    /// </param>
     /// <exception cref="ArgumentException">参数或 URL 非法。</exception>
     /// <exception cref="InvalidOperationException">超过并发上限。</exception>
-    public StreamKey Start(string? vhost, string app, string stream, string url)
+    public StreamKey Start(string? vhost, string app, string stream, string url, bool keepOnNoneReader = false)
     {
         if (string.IsNullOrWhiteSpace(app))
         {
@@ -126,7 +136,7 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
         var schema = protocol == PullProtocol.Rtsp ? "rtsp" : "rtmp";
         var source = _registry.GetOrCreate(key, schema, originType: "proxy");
         var cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
-        var entry = new ProxyEntry(key, url, cts);
+        var entry = new ProxyEntry(key, url, cts, keepOnNoneReader);
         _entries[key] = entry;
         entry.Task = Task.Run(() => PullLoopAsync(key, schema, source, uri, protocol, cts.Token), CancellationToken.None);
 
@@ -167,6 +177,11 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
         _shutdown.Cancel();
         var entries = _entries.Values.ToArray();
         _entries.Clear();
+
+        if (entries.Length > 0)
+        {
+            Log(RtmpLogLevel.Info, $"停止全部拉流代理 {entries.Length} 路（服务关闭）");
+        }
 
         foreach (var entry in entries)
         {
@@ -286,11 +301,12 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
 
     private sealed class ProxyEntry
     {
-        public ProxyEntry(StreamKey key, string url, CancellationTokenSource cts)
+        public ProxyEntry(StreamKey key, string url, CancellationTokenSource cts, bool keepOnNoneReader)
         {
             Key = key;
             Url = url;
             Cts = cts;
+            KeepOnNoneReader = keepOnNoneReader;
             StartedAt = DateTimeOffset.UtcNow;
         }
 
@@ -299,6 +315,8 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
         public string Url { get; }
 
         public CancellationTokenSource Cts { get; }
+
+        public bool KeepOnNoneReader { get; }
 
         public DateTimeOffset StartedAt { get; }
 

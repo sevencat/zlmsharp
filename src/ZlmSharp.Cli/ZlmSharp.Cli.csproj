@@ -34,6 +34,11 @@
     <TrimmerRootAssembly Include="NLog" />
     <TrimmerRootAssembly Include="NLog.Extensions.Logging" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update=".env">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 
   <!-- 发布目录保持干净：只留 zlmsharp.exe（首次运行自动生成 zlmsharp.ini）。
        ILC 会产出原生 pdb，ANCM shim 仅 IIS 在进程内托管时才需要，本项目自托管用不到。 -->

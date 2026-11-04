@@ -153,6 +153,7 @@ public sealed class RecorderManager : IDisposable
         }
 
         session.Dispose();
+        _logger?.LogInformation("停止录像 {Key}", key);
         return true;
     }
 
@@ -165,6 +166,11 @@ public sealed class RecorderManager : IDisposable
             {
                 count++;
             }
+        }
+
+        if (count > 0)
+        {
+            _logger?.LogInformation("停止全部录像 {Count} 路", count);
         }
 
         return count;

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { call } from '../api'
+import { toast, toastError } from '../toast'
 import type { ProxyState, PushState } from '../types'
 
 const proxies = ref<ProxyState[]>([])
@@ -8,7 +9,7 @@ const pushes = ref<PushState[]>([])
 const busy = ref('')
 const pushError = ref('')
 
-const proxyForm = reactive({ app: 'live', stream: '', url: '' })
+const proxyForm = reactive({ app: 'live', stream: '', url: '', keep: false })
 const pushForm = reactive({ app: 'live', stream: '', url: '' })
 
 async function loadProxies() {
@@ -27,12 +28,14 @@ async function addProxy() {
       app: proxyForm.app,
       stream: proxyForm.stream,
       url: proxyForm.url,
+      keep: proxyForm.keep ? 1 : undefined,
     })
     proxyForm.stream = ''
     proxyForm.url = ''
+    toast('success', '拉流代理已添加')
     await loadProxies()
-  } catch {
-    // 失败详情已写入日志
+  } catch (error) {
+    toastError(error, '添加代理')
   } finally {
     busy.value = ''
   }
@@ -42,9 +45,10 @@ async function removeProxy(key: string) {
   busy.value = key
   try {
     await call('delStreamProxy', { key })
+    toast('success', '代理已删除')
     await loadProxies()
-  } catch {
-    // 同上
+  } catch (error) {
+    toastError(error, '删除代理')
   } finally {
     busy.value = ''
   }
@@ -66,10 +70,12 @@ async function addPush() {
     await call('startPush', { app: pushForm.app, stream: pushForm.stream, url: pushForm.url })
     pushForm.stream = ''
     pushForm.url = ''
+    toast('success', '转推已开始')
     await loadPushes()
   } catch (error) {
     // 同时写入侧栏日志；这里额外留在表单下方，避免失败看起来“没反应”
     pushError.value = error instanceof Error ? error.message : String(error)
+    toastError(error, '开始转推')
   } finally {
     busy.value = ''
   }
@@ -79,9 +85,10 @@ async function stopPush(item: PushState) {
   busy.value = item.url
   try {
     await call('stopPush', { app: item.app, stream: item.stream })
+    toast('success', '转推已停止')
     await loadPushes()
-  } catch {
-    // 同上
+  } catch (error) {
+    toastError(error, '停止转推')
   } finally {
     busy.value = ''
   }
@@ -110,6 +117,7 @@ onMounted(() => {
           placeholder="rtsp://user:pass@host/stream 或 rtmp://..."
           @keyup.enter="addProxy"
         />
+        <b-checkbox v-model="proxyForm.keep" size="is-small">没人看也不回收</b-checkbox>
         <b-button size="is-small" type="is-primary" icon-left="plus" :loading="busy === 'addProxy'" @click="addProxy">
           添加
         </b-button>
@@ -127,6 +135,7 @@ onMounted(() => {
                 <b-tag size="is-small" :type="item.online ? 'is-success is-light' : 'is-warning is-light'">
                   {{ item.online ? '在线' : '连接中/重试' }}
                 </b-tag>
+                <b-tag v-if="item.keepOnNoneReader" size="is-small" type="is-info is-light">常驻</b-tag>
               </td>
               <td>{{ Math.round(item.elapsedMs / 1000) }}s</td>
               <td class="actions">

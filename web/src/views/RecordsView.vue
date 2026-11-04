@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { call } from '../api'
+import { toast, toastError } from '../toast'
 import RecordPlayer from '../components/RecordPlayer.vue'
 import type { RecordFileData, RecordState } from '../types'
 
@@ -88,9 +89,10 @@ async function remove(path: string) {
   busy.value = path
   try {
     await call('deleteRecordFile', { app: app.value, stream: stream.value, path })
+    toast('success', '删除成功')
     await browse(currentPath.value)
-  } catch {
-    // 失败详情已写入日志
+  } catch (error) {
+    toastError(error, '删除录像')
   } finally {
     busy.value = ''
   }
@@ -108,17 +110,24 @@ async function toggleRecord(start: boolean) {
   busy.value = start ? 'start' : 'stop'
   try {
     if (start) {
-      await call('startRecord', { app: app.value, stream: stream.value, type: recordFormat.value })
+      const status = await call<RecordState>('startRecord', {
+        app: app.value,
+        stream: stream.value,
+        type: recordFormat.value,
+      })
+      const file = status.mp4Path ?? status.flvPath ?? status.hlsPath
+      toast('success', file ? `开始录像：${file}` : '开始录像成功', 6000)
       await loadRecordings()
       // 起录后直接跳到该流目录，能看到刚生成的文件
       await browse(`${app.value}/${stream.value}`)
     } else {
       await call('stopRecord', { app: app.value, stream: stream.value })
+      toast('success', '停止录像成功')
       await loadRecordings()
       await browse(currentPath.value)
     }
-  } catch {
-    // 同上
+  } catch (error) {
+    toastError(error, start ? '开始录像' : '停止录像')
   } finally {
     busy.value = ''
   }

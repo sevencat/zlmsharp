@@ -174,7 +174,7 @@ public sealed class RtspSession
         }
         catch (IOException exception)
         {
-            Log(RtspLogLevel.Debug, $"RTSP 连接中断: {exception.Message}");
+            Log(RtspLogLevel.Info, $"RTSP 连接中断 {_key}: {exception.Message}");
         }
         finally
         {
@@ -595,11 +595,13 @@ public sealed class RtspSession
         catch (OperationCanceledException)
         {
         }
-        catch (IOException)
+        catch (IOException exception)
         {
+            Log(RtspLogLevel.Info, $"RTSP 播放写出失败 {_key}: {exception.Message}");
         }
         catch (ObjectDisposedException)
         {
+            Log(RtspLogLevel.Debug, $"RTSP 播放管道已释放 {_key}");
         }
         finally
         {

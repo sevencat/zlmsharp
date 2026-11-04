@@ -2,11 +2,12 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using ZlmSharp.Ai;
 using ZlmSharp.Core;
+using ZlmSharp.Extra.Media;
 
 namespace ZlmSharp.Extra.Capture;
 
 /// <summary>
-/// 常驻解码器池：一路流一个 <see cref="FfmpegLiveDecoder"/>，空闲一段时间自动关闭。
+/// 常驻解码器池：一路流一个解码器（<see cref="IMediaToolkit.OpenSampler"/>），空闲一段时间自动关闭。
 /// 分辨率变化或进程意外退出时自动重建。
 /// </summary>
 public sealed class FfmpegDecoderPool : IAsyncDisposable
@@ -14,15 +15,16 @@ public sealed class FfmpegDecoderPool : IAsyncDisposable
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(15);
 
-    private readonly string _ffmpegPath;
+    private readonly IMediaToolkit _toolkit;
     private readonly ILogger? _logger;
     private readonly ConcurrentDictionary<StreamKey, Slot> _slots = new();
     private readonly Timer _sweeper;
     private int _disposed;
 
-    public FfmpegDecoderPool(string ffmpegPath, ILogger? logger = null)
+    public FfmpegDecoderPool(IMediaToolkit toolkit, ILogger? logger = null)
     {
-        _ffmpegPath = ffmpegPath;
+        ArgumentNullException.ThrowIfNull(toolkit);
+        _toolkit = toolkit;
         _logger = logger;
         _sweeper = new Timer(_ => _ = SweepAsync(), null, SweepInterval, SweepInterval);
     }
@@ -111,7 +113,7 @@ public sealed class FfmpegDecoderPool : IAsyncDisposable
                 continue;
             }
 
-            var decoder = FfmpegLiveDecoder.Start(_ffmpegPath, url, width, height);
+            var decoder = _toolkit.OpenSampler(url, width, height);
             var slot = new Slot(decoder)
             {
                 Width = width,
@@ -157,9 +159,9 @@ public sealed class FfmpegDecoderPool : IAsyncDisposable
 
     private sealed class Slot
     {
-        public Slot(FfmpegLiveDecoder decoder) => Decoder = decoder;
+        public Slot(IFrameSampler decoder) => Decoder = decoder;
 
-        public FfmpegLiveDecoder Decoder { get; }
+        public IFrameSampler Decoder { get; }
 
         public int Width { get; init; }
 

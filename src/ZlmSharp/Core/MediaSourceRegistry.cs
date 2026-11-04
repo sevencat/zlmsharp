@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
 namespace ZlmSharp.Core;
 
@@ -6,6 +7,9 @@ namespace ZlmSharp.Core;
 public sealed class MediaSourceRegistry
 {
     private readonly ConcurrentDictionary<StreamKey, MediaSource> _sources = new();
+    private readonly ILogger? _logger;
+
+    public MediaSourceRegistry(ILogger? logger = null) => _logger = logger;
 
     public int Count => _sources.Count;
 
@@ -28,6 +32,7 @@ public sealed class MediaSourceRegistry
 
                 // 已关闭的残留项：移除后重建
                 _sources.TryRemove(new KeyValuePair<StreamKey, MediaSource>(key, existing));
+                _logger?.LogDebug("清理已关闭的残留流 {Key}", key);
                 continue;
             }
 
@@ -51,6 +56,31 @@ public sealed class MediaSourceRegistry
         if (_sources.TryRemove(key, out source))
         {
             source.Close();
+            _logger?.LogInformation(
+                "关闭流 {Key}（schema={Schema}，来源={OriginType}）",
+                key,
+                source.Schema,
+                source.OriginType);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 仅当该 key 当前登记的仍是 <paramref name="expected"/> 时才移除并关闭。
+    /// 用于推流会话收尾：同一 key 的新推流者可能已经接管并创建了新实例，
+    /// 按 key 无脑移除会把新推流者正在写的流摘掉（叠加/转推反复重启时最明显）。
+    /// </summary>
+    public bool Remove(StreamKey key, MediaSource expected)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+
+        if (_sources.TryRemove(new KeyValuePair<StreamKey, MediaSource>(key, expected)))
+        {
+            expected.Close();
+            // 调用方（推流会话收尾等）通常已记录更具体的结束日志，这里只在 Debug 留痕
+            _logger?.LogDebug("移除流 {Key}（实例匹配）", key);
             return true;
         }
 
@@ -84,6 +114,7 @@ public sealed class MediaSourceRegistry
             {
                 source.Close();
                 removed++;
+                _logger?.LogDebug("空闲回收流 {Key}（schema={Schema}）", source.Key, source.Schema);
             }
         }
 

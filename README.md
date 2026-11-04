@@ -60,6 +60,17 @@ Two files, both optional and auto-generated on first run:
 
 The ini parser understands `[section]`, `key=value`, whole-line `;` / `#` comments and last-key-wins; your file is overlaid on the built-in defaults, so upgrading never leaves new keys unset. Out-of-range values are clamped with a startup warning, and unrecognized keys are simply ignored.
 
+### Admin page access
+
+The built-in console is served at `/zlm/admin` (single-file HTML embedded in the assembly). Access control is opt-in:
+
+- `[api] pageToken=...` — when set, the page requires `?token=...` or the `X-ZlmSharp-Token` header; a successful check stores an `HttpOnly` cookie for 7 days, so refreshes and direct visits no longer need the token. Empty (default) means the page is public.
+- Custom policy (SSO, IP allow-list, OTP, …) — register `IAdminPageAuthorizer` after `AddZlmSharp` and it replaces the default token check entirely:
+
+```csharp
+builder.Services.AddSingleton<IAdminPageAuthorizer, MyAdminPageAuthorizer>();
+```
+
 ## HTTP API
 
 All responses follow ZLM's `{"code":0,"msg":"success","data":...}` envelope. `GET /index/api/getApiList` returns the implemented set. Calls from non-loopback addresses must pass `secret=` matching `[api] secret` (excluding the key entirely disables the check); requests from `127.0.0.1` / `::1` are exempt, mirroring ZLM.
@@ -68,13 +79,13 @@ All responses follow ZLM's `{"code":0,"msg":"success","data":...}` envelope. `GE
 | --- | --- |
 | `version`, `getApiList` | Build info, supported API list |
 | `getMediaList` | Online streams: codec, resolution, fps, reader count, uptime, `originType`, `dropFrames`; filters `vhost`/`app`/`stream`/`schema` |
-| `close_streams` | Close matching streams, returns `count` / `closed` |
+| `close_streams` | Close matching streams, returns `count` / `closed`; managed streams are skipped — pull proxies only stop via `delStreamProxy`, overlay outputs only via `stopOverlay` |
 | `getSessionList`, `kick_session` | Inspect or kick publish/play sessions (by `id=` or filters) |
 | `startRecord`, `stopRecord`, `isRecording`, `getRecordList` | Recording control and task list: `type=1` MP4, `2` FLV, `3` MP4+FLV, `4` HLS, `5` all |
 | `getMp4RecordFile`, `deleteRecordFile` | Browse / delete recorded files (`app`+`stream`+`period`+`path`), path-escape safe |
 | `GET /record/{relative path}` | Play / download a recorded file (Range supported); path is relative to the record root, no secret required |
 | `startPush`, `stopPush`, `getPushList` | RTMP relay push |
-| `addStreamProxy`, `delStreamProxy`, `getProxyList` | Pull proxy (RTMP/RTSP source → local stream), list includes source URL and online state |
+| `addStreamProxy`, `delStreamProxy`, `getProxyList` | Pull proxy (RTMP/RTSP source → local stream), list includes source URL, online state and `keepOnNoneReader`; by default an idle proxy is reclaimed like any other stream, pass `keep=1` to keep pulling forever until `delStreamProxy` (`[proxy] keep_on_none_reader` sets the default for the startup list) |
 | `yoloInfo`, `yoloDetect`, `getYoloResult` | YOLO model info, one-shot detection, latest periodic result (compat endpoints backed by the analyzer layer) |
 | `getAnalyzerList`, `analyzeDetect`, `analyzeResult` | Analyzer catalog, one-shot analysis for any analyzer (`analyzer=`), latest periodic results |
 | `startOverlay`, `stopOverlay`, `getOverlay` | Generic overlay: draw any analyzer's results onto a derived `{stream}_ai` output stream |
@@ -142,7 +153,7 @@ timeoutSec=10
 fail_open=0     # 0 = deny when the hook is unreachable
 ```
 
-Hook payloads mirror ZLM (`mediaServerId`, `app`, `stream`, `vhost`, `schema`, `id`, `ip`, `port`, `user_agent`, `params`); query parameters of the publish/play URL are forwarded in `params`, so token-based auth is decided externally. Idle streams are reclaimed after `general.streamNoneReaderDelayMS` according to `protocol.auto_close` / `on_stream_none_reader`.
+Hook payloads mirror ZLM (`mediaServerId`, `app`, `stream`, `vhost`, `schema`, `id`, `ip`, `port`, `user_agent`, `params`); query parameters of the publish/play URL are forwarded in `params`, so token-based auth is decided externally. Idle streams are reclaimed after `general.streamNoneReaderDelayMS` according to `protocol.auto_close` / `on_stream_none_reader`; streams being recorded and overlay outputs are never reclaimed this way. Pull proxies follow the same rule unless created with `keep=1` (or `[proxy] keep_on_none_reader=1`), which keeps them pulling until `delStreamProxy`.
 
 ## Embedding
 

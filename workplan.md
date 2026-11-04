@@ -101,11 +101,15 @@
 ### 稳定性（M8）
 
 - `IdleStreamCleanupService`（后台，2s 扫描一次）：超过 `general.streamNoneReaderDelayMS` 无人观看的流按下列规则处理 ——
-  1. 没有推流会话的残留流（异常退出、代理断开）→ 直接回收；
-  2. `protocol.auto_close=1` → 回收并踢掉推流端；
-  3. 配了 `hook.on_stream_none_reader` → 由外部服务决定（返回 code 0 才关）；
-  4. 其它情况保留（与 ZLM 默认一致，不会误伤长时间无人观看的推流）。
+  1. 正在录像（含启动中）→ 保留（没人看也要把录像写完）；
+  2. 叠加输出流 → 保留（生命周期归 `stopOverlay`）；拉流代理默认随 `auto_close` 回收（之后自动重连），
+     设置 `[proxy] keep_on_none_reader=1` 或 `addStreamProxy?keep=1` 的代理才常驻；
+  3. 没有推流会话的残留流（异常退出）→ 直接回收；
+  4. `protocol.auto_close=1` → 回收并踢掉推流端；
+  5. 配了 `hook.on_stream_none_reader` → 由外部服务决定（返回 code 0 才关）；
+  6. 其它情况保留（与 ZLM 默认一致，不会误伤长时间无人观看的推流）。
 - `MediaSource`：新增 `LastReaderLeftAt`/`IdleSince`（空闲从最后一个读者离开算起）、`TotalDroppedFrames`/`TotalPendingFrames` 聚合。
+- `RecorderSession`：停止/断流时必须 `source.RemoveReader(sink)`（`MediaSink.Dispose` 不会自己摘除），否则 `readerCount` 卡在 1，该流永远进不了无人观看回收。
 - `MediaSourceRegistry.CleanupIdle` 改为按 `IdleSince` 判定，并支持 predicate 叠加条件。
 - `getMediaList` 新增 `dropFrames`（该流所有观众队列累计丢帧），用于发现慢客户端。
 

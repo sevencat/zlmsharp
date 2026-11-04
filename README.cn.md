@@ -60,6 +60,17 @@ HTTP-FLV / WS-FLV / RTSP 的路径支持 `[vhost/]app/stream`（vhost 段可省�
 
 ini 解析支持 `[section]`、`key=value`、整行 `;` / `#` 注释、同名键后者生效；用户文件是叠加在内置默认值之上的，升级新增的键不会缺省。取值越界会被钳制并给出启动警告，无法识别的键直接忽略。
 
+### 管理页面鉴权
+
+内置控制台挂在 `/zlm/admin`（单文件 HTML 内嵌在程序集里）。是否要求验证是可选的：
+
+- `[api] pageToken=...`：设置后打开页面必须带 `?token=...`（或请求头 `X-ZlmSharp-Token`）；校验通过会写入 7 天有效的 `HttpOnly` cookie，后续刷新/直接打开不用再带。留空（默认）表示公开访问。
+- 自定义策略（SSO、IP 白名单、动态口令等）：在 `AddZlmSharp` 之后注册 `IAdminPageAuthorizer` 即可完全接管，默认的 token 校验不再生效：
+
+```csharp
+builder.Services.AddSingleton<IAdminPageAuthorizer, MyAdminPageAuthorizer>();
+```
+
 ## HTTP API
 
 返回体统一是 ZLM 风格的 `{"code":0,"msg":"success","data":...}`。`GET /index/api/getApiList` 返回已实现的接口。非回环地址调用必须带 `secret=`（与 `[api] secret` 一致，清空该键则关闭校验）；来自 `127.0.0.1` / `::1` 的请求与 ZLM 一样免鉴权。
@@ -68,13 +79,13 @@ ini 解析支持 `[section]`、`key=value`、整行 `;` / `#` 注释、同名键
 | --- | --- |
 | `version`、`getApiList` | 构建信息、接口清单 |
 | `getMediaList` | 在线流：编码、分辨率、帧率、读者数、存活时长、`originType`、`dropFrames`；可按 `vhost`/`app`/`stream`/`schema` 过滤 |
-| `close_streams` | 关掉匹配的流，返回 `count` / `closed` |
+| `close_streams` | 关掉匹配的流，返回 `count` / `closed`；跳过受管流——拉流代理只能用 `delStreamProxy` 停，叠加输出流只能用 `stopOverlay` 停 |
 | `getSessionList`、`kick_session` | 查看/踢掉推流与播放会话（`id=` 精确踢，或按条件批量） |
 | `startRecord`、`stopRecord`、`isRecording`、`getRecordList` | 录像控制与任务列表：`type=1` MP4、`2` FLV、`3` MP4+FLV、`4` HLS、`5` 全部 |
 | `getMp4RecordFile`、`deleteRecordFile` | 浏览/删除录像文件（`app`+`stream`+`period`+`path`），越界路径拒绝 |
 | `GET /record/{相对路径}` | 直接播放/下载录像文件（支持 Range），路径相对录像根目录，无需 secret |
 | `startPush`、`stopPush`、`getPushList` | RTMP 转推 |
-| `addStreamProxy`、`delStreamProxy`、`getProxyList` | 拉流代理（RTMP/RTSP 源 → 本地流），列表含源地址与在线状态 |
+| `addStreamProxy`、`delStreamProxy`、`getProxyList` | 拉流代理（RTMP/RTSP 源 → 本地流），列表含源地址、在线状态与 `keepOnNoneReader`；普通代理没人看时照常回收，`keep=1` 则一直拉、直到 `delStreamProxy`（`[proxy] keep_on_none_reader` 设启动列表的默认值） |
 | `yoloInfo`、`yoloDetect`、`getYoloResult` | 模型信息、单次检测、定时检测的最近结果 |
 | `startYoloOverlay`、`stopYoloOverlay`、`getYoloOverlay` | 把检测框画进派生流 `{stream}_yolo` |
 
@@ -142,7 +153,7 @@ timeoutSec=10
 fail_open=0     # 0 = hook 不可达时拒绝，避免鉴权被绕过
 ```
 
-hook 请求体字段与 ZLM 一致（`mediaServerId`、`app`、`stream`、`vhost`、`schema`、`id`、`ip`、`port`、`user_agent`、`params`）；推/播 URL 上的查询参数（如 `?token=xxx`）原样放进 `params`，由外部服务判定。无人观看的流在 `general.streamNoneReaderDelayMS` 之后按 `protocol.auto_close` / `on_stream_none_reader` 的规则回收。
+hook 请求体字段与 ZLM 一致（`mediaServerId`、`app`、`stream`、`vhost`、`schema`、`id`、`ip`、`port`、`user_agent`、`params`）；推/播 URL 上的查询参数（如 `?token=xxx`）原样放进 `params`，由外部服务判定。无人观看的流在 `general.streamNoneReaderDelayMS` 之后按 `protocol.auto_close` / `on_stream_none_reader` 的规则回收；正在录像的流与叠加流不参与回收。拉流代理默认同样参与回收（回收后会自动重连），只有建代理时带 `keep=1`（或 `[proxy] keep_on_none_reader=1`）才一直拉、直到 `delStreamProxy`。
 
 ## 嵌入式使用
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
 namespace ZlmSharp.Core;
 
@@ -31,6 +32,9 @@ public sealed class MediaSessionRegistry
     private sealed record Entry(MediaSessionInfo Info, Action Kick);
 
     private readonly ConcurrentDictionary<string, Entry> _sessions = new(StringComparer.Ordinal);
+    private readonly ILogger? _logger;
+
+    public MediaSessionRegistry(ILogger? logger = null) => _logger = logger;
 
     public int Count => _sessions.Count;
 
@@ -92,6 +96,13 @@ public sealed class MediaSessionRegistry
             }
 
             kicked.Add(pair.Value.Info);
+            _logger?.LogInformation(
+                "踢掉会话 {Id}（{Type} {Key}，{Ip}）",
+                pair.Value.Info.Id,
+                pair.Value.Info.Type,
+                pair.Value.Info.Key,
+                pair.Value.Info.Ip ?? "-");
+
             try
             {
                 pair.Value.Kick();

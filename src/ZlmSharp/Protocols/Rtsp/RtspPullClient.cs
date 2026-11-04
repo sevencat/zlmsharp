@@ -214,10 +214,11 @@ public static class RtspPullClient
 
         try
         {
-            await ReadLoopAsync(stream, reader, source, tracks, writeLock, cancellationToken).ConfigureAwait(false);
+            await ReadLoopAsync(stream, reader, source, tracks, writeLock, log, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
+            log?.Invoke(RtspLogLevel.Info, $"RTSP 拉流结束 {source.Key} ← {baseUri}");
             keepAliveCts.Cancel();
 
             try
@@ -248,6 +249,7 @@ public static class RtspPullClient
         MediaSource source,
         IReadOnlyList<PullTrack> tracks,
         SemaphoreSlim writeLock,
+        RtspLogHandler? log,
         CancellationToken cancellationToken)
     {
         var lastReport = DateTime.UtcNow;
@@ -256,12 +258,14 @@ public static class RtspPullClient
         {
             if (source.IsClosed)
             {
+                log?.Invoke(RtspLogLevel.Info, $"本地流已关闭，结束 RTSP 拉流 {source.Key}");
                 return;
             }
 
             var item = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             if (item is null)
             {
+                log?.Invoke(RtspLogLevel.Info, $"RTSP 拉流对端关闭 {source.Key}");
                 return;
             }
 

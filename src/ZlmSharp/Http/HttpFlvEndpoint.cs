@@ -154,6 +154,8 @@ public static class HttpFlvEndpoint
         var body = context.Response.BodyWriter;
         var startedAt = DateTimeOffset.UtcNow;
 
+        logger.LogInformation("HTTP-FLV 开始播放 {Url}（{Remote}）", url, context.Connection.RemoteIpAddress);
+
         try
         {
             var (frames, bytes) = await FlvLiveStream

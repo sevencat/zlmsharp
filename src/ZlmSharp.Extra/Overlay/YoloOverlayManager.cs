@@ -1,23 +1,22 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Globalization;
 using Microsoft.Extensions.Logging;
 using ZlmSharp.Ai;
 using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
 using ZlmSharp.Extra.Analysis;
+using ZlmSharp.Extra.Media;
 
 namespace ZlmSharp.Extra.Overlay;
 
 /// <summary>
-/// 结果叠加流：ffmpeg 解码本地 HTTP-FLV → 在 RGB24 帧上用注册的 <see cref="IOverlayRenderer"/> 绘制
-/// → ffmpeg 编码推回本机 RTMP，输出 <c>{stream}_ai</c> 可直接播放。
+/// 结果叠加流：解码本地 HTTP-FLV → 在 RGB24 帧上用注册的 <see cref="IOverlayRenderer"/> 绘制
+/// → 编码推回本机 RTMP，输出 <c>{stream}_ai</c> 可直接播放。
 /// </summary>
 /// <remarks>
-/// 本项目没有内置 H.264 解码/编码器，所以解码与编码都交给 ffmpeg 子进程，中间只传原始 RGB24 帧。
-/// 绘制内容来自 <see cref="OverlayResultCache"/> 中各分析器最近一次结果（采样间隔秒级刷新），
-/// 不对每一帧推理；叠加流本身（<c>*_ai</c>）不会被定时检测采样，避免回路。
+/// 本项目没有内置 H.264 解码/编码器，解码与编码都交给 <see cref="IMediaToolkit"/>（默认 ffmpeg 子进程），
+/// 中间只传原始 RGB24 帧。绘制内容来自 <see cref="OverlayResultCache"/> 中各分析器最近一次结果
+/// （采样间隔秒级刷新），不对每一帧推理；叠加流本身（<c>*_ai</c>）不会被定时检测采样，避免回路。
 /// </remarks>
 public sealed class YoloOverlayManager : IOverlayController, IDisposable
 {
@@ -26,6 +25,7 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
     private readonly MediaSourceRegistry _registry;
     private readonly OverlayResultCache _results;
     private readonly OverlayComposer _composer;
+    private readonly IMediaToolkit _media;
     private readonly AppOptions _options;
     private readonly string _suffix;
     private readonly ILogger? _logger;
@@ -38,17 +38,20 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
         AppOptions options,
         OverlayResultCache results,
         OverlayComposer composer,
+        IMediaToolkit media,
         ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(results);
         ArgumentNullException.ThrowIfNull(composer);
+        ArgumentNullException.ThrowIfNull(media);
 
         _registry = registry;
         _options = options;
         _results = results;
         _composer = composer;
+        _media = media;
         _suffix = options.Env.OverlaySuffix;
         _logger = logger;
     }
@@ -145,7 +148,7 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
                 _results,
                 _composer,
                 analyzerId,
-                _options.Env.ResolveFfmpegPath(),
+                _media,
                 inputUrl,
                 outputUrl,
                 OverlayStreamName(key.Stream),
@@ -255,10 +258,10 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
     }
 }
 
-/// <summary>一路叠加流的 ffmpeg 解码 → 绘制 → 编码管线。</summary>
+/// <summary>一路叠加流的解码 → 绘制 → 编码管线（解码/编码由 <see cref="IMediaToolkit"/> 提供）。</summary>
 internal sealed class OverlaySession : IDisposable
 {
-    private static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(3);
 
     private readonly StreamKey _key;
     private readonly int _sourceWidth;
@@ -266,7 +269,7 @@ internal sealed class OverlaySession : IDisposable
     private readonly OverlayResultCache _results;
     private readonly OverlayComposer _composer;
     private readonly string? _analyzerId;
-    private readonly string _ffmpegPath;
+    private readonly IMediaToolkit _media;
     private readonly string _inputUrl;
     private readonly string _outputUrl;
     private readonly string _overlayStream;
@@ -278,14 +281,11 @@ internal sealed class OverlaySession : IDisposable
     private readonly TimeSpan _resultMaxAge;
     private readonly ILogger? _logger;
 
-    private readonly Process _decoder = new();
-    private readonly Process _encoder = new();
     private readonly CancellationTokenSource _cts = new();
-    private readonly object _stderrLock = new();
-    private readonly Dictionary<string, string> _lastStderr = new(StringComparer.Ordinal);
-
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
 
+    private IFrameReader? _reader;
+    private IFrameSink? _sink;
     private Task? _pump;
     private long _frames;
     private volatile OverlayState _state = OverlayState.Starting;
@@ -299,7 +299,7 @@ internal sealed class OverlaySession : IDisposable
         OverlayResultCache results,
         OverlayComposer composer,
         string? analyzerId,
-        string ffmpegPath,
+        IMediaToolkit media,
         string inputUrl,
         string outputUrl,
         string overlayStream,
@@ -317,7 +317,7 @@ internal sealed class OverlaySession : IDisposable
         _results = results;
         _composer = composer;
         _analyzerId = analyzerId;
-        _ffmpegPath = ffmpegPath;
+        _media = media;
         _inputUrl = inputUrl;
         _outputUrl = outputUrl;
         _overlayStream = overlayStream;
@@ -332,15 +332,18 @@ internal sealed class OverlaySession : IDisposable
 
     public void Start()
     {
-        StartProcess(_decoder, BuildDecoderArguments(), redirectStandardInput: false, redirectStandardOutput: true, "decoder");
+        _reader = _media.OpenReader(_inputUrl, _width, _height);
 
         try
         {
-            StartProcess(_encoder, BuildEncoderArguments(), redirectStandardInput: true, redirectStandardOutput: false, "encoder");
+            _sink = _media.OpenSink(new FrameSinkOptions(_outputUrl, _width, _height, _fps, _bitrateKbps)
+            {
+                GopSize = Math.Max(1, _fps * 2),
+            });
         }
         catch
         {
-            KillProcess(_decoder);
+            DisposeReader();
             throw;
         }
 
@@ -387,40 +390,36 @@ internal sealed class OverlaySession : IDisposable
         {
         }
 
-        KillProcess(_decoder);
-        KillProcess(_encoder);
-
+        DisposeReader();
+        DisposeSink();
         _state = OverlayState.Stopped;
-        _decoder.Dispose();
-        _encoder.Dispose();
         _cts.Dispose();
     }
 
     private async Task PumpAsync(CancellationToken cancellationToken)
     {
+        var reader = _reader;
+        var sink = _sink;
+        if (reader is null || sink is null)
+        {
+            return;
+        }
+
         var buffer = new byte[_frameSize];
         var stride = _width * 3;
 
         try
         {
-            var stdout = _decoder.StandardOutput.BaseStream;
-            var stdin = _encoder.StandardInput.BaseStream;
-
             while (!cancellationToken.IsCancellationRequested)
             {
-                var read = await stdout
-                    .ReadAtLeastAsync(buffer.AsMemory(0, _frameSize), _frameSize, throwOnEndOfStream: false, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (read < _frameSize)
+                if (!await reader.ReadIntoAsync(buffer, cancellationToken).ConfigureAwait(false))
                 {
                     break;
                 }
 
                 Draw(buffer, stride);
 
-                await stdin.WriteAsync(buffer.AsMemory(0, _frameSize), cancellationToken).ConfigureAwait(false);
-                await stdin.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await sink.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
                 Interlocked.Increment(ref _frames);
             }
         }
@@ -434,7 +433,7 @@ internal sealed class OverlaySession : IDisposable
         }
         finally
         {
-            await ShutdownProcessesAsync(cancellationToken).ConfigureAwait(false);
+            await ShutdownAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -469,27 +468,31 @@ internal sealed class OverlaySession : IDisposable
         }
     }
 
-    private async Task ShutdownProcessesAsync(CancellationToken cancellationToken)
+    private async Task ShutdownAsync(CancellationToken cancellationToken)
     {
-        // 先停解码，避免继续往已关闭的管道写
-        KillProcess(_decoder);
+        var reader = _reader;
+        _reader = null;
+        var decoderExit = reader?.ExitCode;
+        var decoderError = reader?.LastError;
 
-        try
+        if (reader is not null)
         {
-            _encoder.StandardInput.BaseStream.Close();
+            await reader.DisposeAsync().ConfigureAwait(false);
         }
-        catch (Exception)
+
+        var sink = _sink;
+        _sink = null;
+        var sinkError = sink?.LastError;
+        int? encoderExit = null;
+
+        if (sink is not null)
         {
+            // 先关输入让编码器写完 trailer，再回收进程
+            encoderExit = await sink.CompleteAsync(ExitGrace).ConfigureAwait(false);
+            await sink.DisposeAsync().ConfigureAwait(false);
         }
 
-        await WaitForExitAsync(_encoder).ConfigureAwait(false);
-        await WaitForExitAsync(_decoder).ConfigureAwait(false);
-
-        var cancelled = cancellationToken.IsCancellationRequested;
-        var decoderExit = TryGetExitCode(_decoder);
-        var encoderExit = TryGetExitCode(_encoder);
-
-        if (cancelled)
+        if (cancellationToken.IsCancellationRequested)
         {
             _state = OverlayState.Stopped;
             return;
@@ -497,12 +500,12 @@ internal sealed class OverlaySession : IDisposable
 
         if (CurrentError() is null && decoderExit is > 0)
         {
-            SetError($"解码进程退出（exit={decoderExit}）：{LastStderr("decoder")}");
+            SetError($"解码进程退出（exit={decoderExit}）：{Tail(decoderError)}");
         }
 
         if (CurrentError() is null && encoderExit is > 0)
         {
-            SetError($"编码进程退出（exit={encoderExit}）：{LastStderr("encoder")}");
+            SetError($"编码进程退出（exit={encoderExit}）：{Tail(sinkError)}");
         }
 
         if (CurrentError() is null && Interlocked.Read(ref _frames) == 0)
@@ -520,197 +523,46 @@ internal sealed class OverlaySession : IDisposable
             error ?? "-");
     }
 
-    private async Task WaitForExitAsync(Process process)
+    private void DisposeReader()
     {
-        try
+        var reader = _reader;
+        _reader = null;
+        if (reader is null)
         {
-            if (!process.HasExited)
-            {
-                using var timeout = new CancellationTokenSource(ExitGrace);
-                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-            }
+            return;
         }
-        catch (Exception)
-        {
-            KillProcess(process);
-        }
-    }
-
-    private void SetError(string message)
-    {
-        lock (_stderrLock)
-        {
-            _error ??= message;
-        }
-    }
-
-    private string? CurrentError()
-    {
-        lock (_stderrLock)
-        {
-            return _error;
-        }
-    }
-
-    private string LastStderr(string tag)
-    {
-        lock (_stderrLock)
-        {
-            return _lastStderr.TryGetValue(tag, out var line) && line.Length > 0 ? line : "无 stderr 输出";
-        }
-    }
-
-    private void StartProcess(Process process, IEnumerable<string> arguments, bool redirectStandardInput, bool redirectStandardOutput, string tag)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _ffmpegPath,
-            RedirectStandardInput = redirectStandardInput,
-            RedirectStandardOutput = redirectStandardOutput,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        process.StartInfo = startInfo;
 
         try
         {
-            process.Start();
-        }
-        catch (Exception exception)
-        {
-            throw new InvalidOperationException($"无法启动 ffmpeg（{_ffmpegPath}）：{exception.Message}", exception);
-        }
-
-        _ = Task.Run(() => DrainStderrAsync(process, tag));
-    }
-
-    private async Task DrainStderrAsync(Process process, string tag)
-    {
-        try
-        {
-            while (true)
-            {
-                var line = await process.StandardError.ReadLineAsync().ConfigureAwait(false);
-                if (line is null)
-                {
-                    return;
-                }
-
-                line = line.Trim();
-                if (line.Length == 0)
-                {
-                    continue;
-                }
-
-                lock (_stderrLock)
-                {
-                    _lastStderr[tag] = line;
-                }
-
-                _logger?.LogDebug("结果叠加流 ffmpeg[{Tag}] {Line}", tag, line);
-            }
-        }
-        catch (Exception)
-        {
-            // 进程被杀时读 stderr 会抛异常，忽略
-        }
-    }
-
-    private IEnumerable<string> BuildDecoderArguments()
-    {
-        yield return "-hide_banner";
-        yield return "-loglevel";
-        yield return "error";
-        yield return "-nostdin";
-        yield return "-fflags";
-        yield return "nobuffer";
-        yield return "-i";
-        yield return _inputUrl;
-        yield return "-an";
-        yield return "-sn";
-        yield return "-vf";
-        yield return string.Create(
-            CultureInfo.InvariantCulture,
-            $"fps={_fps},scale={_width}:{_height}:flags=fast_bilinear");
-        yield return "-f";
-        yield return "rawvideo";
-        yield return "-pix_fmt";
-        yield return "rgb24";
-        yield return "pipe:1";
-    }
-
-    private IEnumerable<string> BuildEncoderArguments()
-    {
-        yield return "-hide_banner";
-        yield return "-loglevel";
-        yield return "error";
-        yield return "-nostdin";
-        yield return "-f";
-        yield return "rawvideo";
-        yield return "-pixel_format";
-        yield return "rgb24";
-        yield return "-video_size";
-        yield return string.Create(CultureInfo.InvariantCulture, $"{_width}x{_height}");
-        yield return "-framerate";
-        yield return _fps.ToString(CultureInfo.InvariantCulture);
-        yield return "-i";
-        yield return "pipe:0";
-        yield return "-an";
-        yield return "-c:v";
-        yield return "libx264";
-        yield return "-preset";
-        yield return "veryfast";
-        yield return "-tune";
-        yield return "zerolatency";
-        yield return "-pix_fmt";
-        yield return "yuv420p";
-        yield return "-g";
-        yield return (_fps * 2).ToString(CultureInfo.InvariantCulture);
-        yield return "-keyint_min";
-        yield return _fps.ToString(CultureInfo.InvariantCulture);
-        yield return "-sc_threshold";
-        yield return "0";
-        yield return "-b:v";
-        yield return $"{_bitrateKbps}k";
-        yield return "-maxrate";
-        yield return $"{_bitrateKbps}k";
-        yield return "-bufsize";
-        yield return $"{_bitrateKbps * 2}k";
-        yield return "-f";
-        yield return "flv";
-        yield return _outputUrl;
-    }
-
-    private static int? TryGetExitCode(Process process)
-    {
-        try
-        {
-            return process.HasExited ? process.ExitCode : null;
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-    }
-
-    private static void KillProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
+            reader.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
         catch (Exception)
         {
         }
     }
+
+    private void DisposeSink()
+    {
+        var sink = _sink;
+        _sink = null;
+        if (sink is null)
+        {
+            return;
+        }
+
+        try
+        {
+            sink.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private void SetError(string message) => _error ??= message;
+
+    private string? CurrentError() => _error;
+
+    private static string Tail(string? error) =>
+        string.IsNullOrWhiteSpace(error) ? "无 stderr 输出" : error;
 }

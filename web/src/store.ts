@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import { call } from './api'
-import type { MediaInfo, RecordState, VersionInfo } from './types'
+import type { MediaInfo, OverlayState, RecordState, VersionInfo } from './types'
 
 export const state = reactive({
   version: null as VersionInfo | null,
@@ -9,6 +9,8 @@ export const state = reactive({
   mediaError: '',
   /** 录像任务（含录制中的流），与在线流一起 5s 轮询 */
   recordings: [] as RecordState[],
+  /** 叠加会话（用于识别叠加输出流，未装 Extra 时为空） */
+  overlays: [] as OverlayState[],
   loading: false,
   updatedAt: 0,
 })
@@ -40,6 +42,13 @@ export async function refresh() {
       state.recordings = await call<RecordState[]>('getRecordList')
     } catch {
       state.recordings = []
+    }
+
+    // 未装 Extra 时返回空数组，不当作错误
+    try {
+      state.overlays = await call<OverlayState[]>('getOverlay')
+    } catch {
+      state.overlays = []
     }
 
     state.updatedAt = Date.now()

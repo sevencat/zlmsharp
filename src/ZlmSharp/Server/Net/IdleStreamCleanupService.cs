@@ -1,7 +1,10 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ZlmSharp.Ai;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
+using ZlmSharp.Protocols.Rtmp;
+using ZlmSharp.Recording;
 using ZlmSharp.Server.Hooks;
 
 namespace ZlmSharp.Server.Net;
@@ -9,10 +12,13 @@ namespace ZlmSharp.Server.Net;
 /// <summary>
 /// 无人观看回收：每隔几秒扫描一次，把「超过 <c>general.streamNoneReaderDelayMS</c> 没人看」的流关掉。
 /// 是否关闭正在推流/代理的流由配置决定：
-/// 1. 没有发布者会话的残留流 → 直接回收；
-/// 2. <c>protocol.auto_close=1</c> → 直接回收（并踢掉推流端）；
-/// 3. 配了 <c>hook.on_stream_none_reader</c> → 由外部服务决定（返回 code 0 才关）；
-/// 4. 其它情况 → 保留（与 ZLM 默认一致）。
+/// 1. 正在录像的流 → 保留（没人看也要把录像写完）；
+/// 2. 叠加输出流 → 永不自动回收（生命周期归 stopOverlay）；
+/// 3. 拉流代理 → 由 <c>keep_on_none_reader</c>（或单路 <c>keep=1</c>）决定，默认随 auto_close 回收后自动重连；
+/// 4. 没有发布者会话的残留流 → 直接回收；
+/// 5. <c>protocol.auto_close=1</c> → 直接回收（并踢掉推流端）；
+/// 6. 配了 <c>hook.on_stream_none_reader</c> → 由外部服务决定（返回 code 0 才关）；
+/// 7. 其它情况 → 保留（与 ZLM 默认一致）。
 /// </summary>
 internal sealed class IdleStreamCleanupService : BackgroundService
 {
@@ -22,6 +28,9 @@ internal sealed class IdleStreamCleanupService : BackgroundService
     private readonly MediaSourceRegistry _registry;
     private readonly MediaSessionRegistry _sessions;
     private readonly MediaHookService _hook;
+    private readonly IOverlayController? _overlays;
+    private readonly RecorderManager? _recorder;
+    private readonly RtmpPullProxyManager? _proxies;
     private readonly ILogger _logger;
 
     public IdleStreamCleanupService(
@@ -29,12 +38,18 @@ internal sealed class IdleStreamCleanupService : BackgroundService
         MediaSourceRegistry registry,
         MediaSessionRegistry sessions,
         MediaHookService hook,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IOverlayController? overlays = null,
+        RecorderManager? recorder = null,
+        RtmpPullProxyManager? proxies = null)
     {
         _options = options;
         _registry = registry;
         _sessions = sessions;
         _hook = hook;
+        _overlays = overlays;
+        _recorder = recorder;
+        _proxies = proxies;
         _logger = loggerFactory.CreateLogger("ZlmSharp.IdleCleanup");
     }
 
@@ -91,30 +106,24 @@ internal sealed class IdleStreamCleanupService : BackgroundService
                 continue;
             }
 
+            // 正在录像的流即使无人观看也保留：录像不依赖观众，摘流会中断录制。
+            if (IsRecording(source.Key))
+            {
+                continue;
+            }
+
+            // 拉流代理与叠加流的生命周期由各自管理器持有（delStreamProxy / stopOverlay），
+            // 不能当残留流回收：观众短暂断开就摘流，代理/叠加都只能人工重启。
+            if (IsManagedStream(source))
+            {
+                continue;
+            }
+
             var publishers = _sessions.Snapshot(
                 session => session.Type == MediaSessionType.Publisher && session.Key == source.Key);
 
             if (publishers.Count == 0)
             {
-                // 拉流代理没有 Publisher 会话：它的生命周期由 RtmpPullProxyManager 持有
-                // （addStreamProxy / delStreamProxy），不能当残留流回收——观众只是短暂断开
-                // 20 秒，整条代理流就会被摘掉，且代理重连只往已关闭的 source 写帧，流再也回不来。
-                if (string.Equals(source.OriginType, "proxy", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!_options.Protocol.AutoClose)
-                    {
-                        continue;
-                    }
-
-                    _logger.LogInformation(
-                        "无人观看回收代理流 {Key}（auto_close=1，闲置 {Idle:F1}s，schema={Schema}）",
-                        source.Key,
-                        (now - source.IdleSince).TotalSeconds,
-                        source.Schema);
-                    (closable ??= []).Add(source.Key);
-                    continue;
-                }
-
                 // 发布者已消失但流还留着（推流端异常退出）：直接回收
                 _logger.LogInformation(
                     "回收残留流 {Key}（发布者已消失，闲置 {Idle:F1}s，schema={Schema}）",
@@ -154,4 +163,16 @@ internal sealed class IdleStreamCleanupService : BackgroundService
             _registry.CleanupIdle(delay, source => closable.Contains(source.Key), now);
         }
     }
+
+    /// <summary>正在录像（含启动中）的流不参与无人观看回收。</summary>
+    private bool IsRecording(StreamKey key) => _recorder?.Get(key)?.Recording == true;
+
+    /// <summary>
+    /// 受管流：叠加输出流永不回收；拉流代理只有显式设置 <c>keep_on_none_reader</c> 时才常驻，
+    /// 否则按 <c>auto_close</c> / hook 规则回收（<see cref="RtmpPullProxyManager"/> 会自己重建并重连）。
+    /// </summary>
+    private bool IsManagedStream(MediaSource source) =>
+        string.Equals(source.OriginType, "proxy", StringComparison.OrdinalIgnoreCase)
+            ? _proxies?.IsKeptOnNoneReader(source.Key) == true
+            : (_overlays?.IsOverlayStream(source.Key.Stream) ?? false);
 }

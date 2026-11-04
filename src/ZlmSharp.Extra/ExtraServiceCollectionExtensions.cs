@@ -7,6 +7,7 @@ using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Configuration;
 using ZlmSharp.Extra.Analysis;
 using ZlmSharp.Extra.Capture;
+using ZlmSharp.Extra.Media;
 using ZlmSharp.Extra.Overlay;
 using ZlmSharp.Extra.Yolo;
 
@@ -31,8 +32,15 @@ public static class ExtraServiceCollectionExtensions
         services.TryAddSingleton<IYoloBackendFactory>(UnavailableYoloBackendFactory.Instance);
         services.TryAddSingleton(provider => YoloOptions.FromEnv(provider.GetRequiredService<AppOptions>().Env));
         services.TryAddSingleton<YoloDetectorService>();
+
+        // 外部工具（ffmpeg/ffprobe）：全部媒体操作都走这个入口，方便换成 DLL 实现
+        services.TryAddSingleton<IMediaToolkit>(provider =>
+        {
+            var env = provider.GetRequiredService<AppOptions>().Env;
+            return new FfmpegToolkit(env.ResolveFfmpegPath(), env.ResolveFfprobePath());
+        });
         services.TryAddSingleton(provider => new FfmpegDecoderPool(
-            provider.GetRequiredService<AppOptions>().Env.ResolveFfmpegPath(),
+            provider.GetRequiredService<IMediaToolkit>(),
             provider.GetService<ILoggerFactory>()?.CreateLogger<FfmpegDecoderPool>()));
         services.TryAddSingleton<OverlayResultCache>();
         services.TryAddSingleton<OverlayComposer>(OverlayComposer.Default());
