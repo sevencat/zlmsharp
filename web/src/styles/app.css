@@ -169,6 +169,17 @@ body {
   color: var(--muted);
 }
 
+/* 可点击的行内链接（录像目录等） */
+a.link {
+  color: var(--side-active);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a.link:hover {
+  text-decoration: underline;
+}
+
 /* 卡片 */
 .card-grid {
   display: grid;

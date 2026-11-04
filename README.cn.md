@@ -70,8 +70,9 @@ ini 解析支持 `[section]`、`key=value`、整行 `;` / `#` 注释、同名键
 | `getMediaList` | 在线流：编码、分辨率、帧率、读者数、存活时长、`originType`、`dropFrames`；可按 `vhost`/`app`/`stream`/`schema` 过滤 |
 | `close_streams` | 关掉匹配的流，返回 `count` / `closed` |
 | `getSessionList`、`kick_session` | 查看/踢掉推流与播放会话（`id=` 精确踢，或按条件批量） |
-| `startRecord`、`stopRecord`、`isRecording` | 录像控制：`type=1` MP4、`2` FLV、`3` MP4+FLV、`4` HLS、`5` 全部 |
-| `getMp4RecordFile`、`deleteRecordFile` | 查询/删除录像文件（`app`+`stream`+`period`+`path`），越界路径拒绝 |
+| `startRecord`、`stopRecord`、`isRecording`、`getRecordList` | 录像控制与任务列表：`type=1` MP4、`2` FLV、`3` MP4+FLV、`4` HLS、`5` 全部 |
+| `getMp4RecordFile`、`deleteRecordFile` | 浏览/删除录像文件（`app`+`stream`+`period`+`path`），越界路径拒绝 |
+| `GET /record/{相对路径}` | 直接播放/下载录像文件（支持 Range），路径相对录像根目录，无需 secret |
 | `startPush`、`stopPush`、`getPushList` | RTMP 转推 |
 | `addStreamProxy`、`delStreamProxy`、`getProxyList` | 拉流代理（RTMP/RTSP 源 → 本地流），列表含源地址与在线状态 |
 | `yoloInfo`、`yoloDetect`、`getYoloResult` | 模型信息、单次检测、定时检测的最近结果 |
@@ -101,6 +102,7 @@ list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/liv
 ## 录制
 
 - `startRecord?app=&stream=&type=&max_second=` 对在线流开始录制；文件落在 `ZLM_RECORD_ROOT`（回退 `protocol.mp4_save_path`）下的 `app/stream/yyyy-MM-dd/`。
+- 接口返回的 `mp4Path` / `flvPath` / `hlsPath` 是**相对录像根目录的归一化路径**（`/` 分隔、不含盘符与根前缀，如 `live/cam/2026-11-04/20-15-08-001.mp4`），拼 `http://host:port/record/{路径}` 即可播放或下载（`getMp4RecordFile` 的 `rootPath` 同理）。
 - MP4 走 AVCC（`avcC` + `esds`），FLV 是追加式（崩溃可播），HLS 按关键帧对齐产出 `hls-000001.ts…` + `hls.m3u8`（`[hls] seg_duration`、`seg_num`）。
 - 推流端断线重推后会自动续录；`protocol.enable_mp4` / `enable_flv_record` 打开时开机自动录（跳过 `*_ai` 叠加流）。
 

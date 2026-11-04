@@ -34,8 +34,11 @@ public sealed record ApiMediaListResponse(int Code, IReadOnlyList<ApiMediaInfo> 
 
 public sealed record ApiCloseStreamsResponse(int Code, int Count, bool Closed);
 
-/// <summary><c>getMp4RecordFile</c>：录像根目录 + 文件/目录名列表。</summary>
-public sealed record ApiRecordFileData(string RootPath, IReadOnlyList<string> Paths);
+/// <summary>
+/// <c>getMp4RecordFile</c>：相对于录像根目录的当前目录 + 条目名列表。
+/// <c>directories</c> 为 true 表示 <c>paths</c> 是子目录（可继续浏览），否则是文件名（可拼 <c>/record/{rootPath}/{name}</c> 访问）。
+/// </summary>
+public sealed record ApiRecordFileData(string RootPath, IReadOnlyList<string> Paths, bool Directories = false);
 
 public sealed record ApiRecordFileResponse(int Code, ApiRecordFileData Data);
 
@@ -141,7 +144,10 @@ public sealed record ApiYoloOverlayFlagData(bool Flag);
 
 public sealed record ApiYoloOverlayFlagResponse(int Code, ApiYoloOverlayFlagData Data);
 
-/// <summary>一路录像的状态（路径是当前切片）。</summary>
+/// <summary>
+/// 一路录像的状态。<c>mp4Path/flvPath/hlsPath</c> 是当前切片相对录像根目录的归一化路径
+/// （<c>/</c> 分隔、不含盘符与前缀），拼上 <c>/record/</c> 即可通过 HTTP 访问文件。
+/// </summary>
 public sealed record ApiRecordData(
     string Vhost,
     string App,
@@ -154,7 +160,8 @@ public sealed record ApiRecordData(
     long Frames,
     long DurationMs,
     long StartedAt,
-    string? Error);
+    string? Error,
+    string? HlsPath = null);
 
 public sealed record ApiRecordResponse(int Code, string? Msg, ApiRecordData? Data);
 

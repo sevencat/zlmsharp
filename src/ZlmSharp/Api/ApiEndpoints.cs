@@ -38,6 +38,7 @@ public static class ApiEndpoints
         "/index/api/kick_session",
         "/index/api/getMp4RecordFile",
         "/index/api/deleteRecordFile",
+        "/index/api/getRecordList",
         "/index/api/yoloInfo",
         "/index/api/yoloDetect",
         "/index/api/getYoloResult",
@@ -98,6 +99,9 @@ public static class ApiEndpoints
         endpoints.MapGet("/index/api/isRecording", (RequestDelegate)(context => IsRecordingAsync(context, options, recorder)));
         endpoints.MapGet("/index/api/getMp4RecordFile", (RequestDelegate)(context => GetRecordFileAsync(context, options, recordFiles)));
         endpoints.MapGet("/index/api/deleteRecordFile", (RequestDelegate)(context => DeleteRecordFileAsync(context, options, recordFiles)));
+        endpoints.MapGet("/index/api/getRecordList", (RequestDelegate)(context => GetRecordListAsync(context, options, recorder)));
+        // 录像文件访问：路径相对录像根目录，支持 Range
+        endpoints.MapGet("/record/{**path}", (RequestDelegate)(context => ServeRecordFileAsync(context, recordFiles)));
         endpoints.MapGet("/index/api/startPush", (RequestDelegate)(context => StartPushAsync(context, options, pushes)));
         endpoints.MapGet("/index/api/stopPush", (RequestDelegate)(context => StopPushAsync(context, options, pushes)));
         endpoints.MapGet("/index/api/getPushList", (RequestDelegate)(context => GetPushListAsync(context, options, pushes)));
@@ -779,7 +783,7 @@ public static class ApiEndpoints
 
             await WriteJsonAsync(
                 context,
-                new ApiRecordResponse(0, null, ToApiRecord(status)),
+                new ApiRecordResponse(0, null, ToApiRecord(status, options)),
                 ApiJsonContext.Default.ApiRecordResponse);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
@@ -827,23 +831,71 @@ public static class ApiEndpoints
 
         await WriteJsonAsync(
             context,
-            new ApiRecordResponse(0, null, status is null ? null : ToApiRecord(status)),
+            new ApiRecordResponse(0, null, status is null ? null : ToApiRecord(status, options)),
             ApiJsonContext.Default.ApiRecordResponse);
     }
 
-    private static ApiRecordData ToApiRecord(RecordingStatus status) => new(
+    private static ApiRecordData ToApiRecord(RecordingStatus status, AppOptions options) => new(
         status.Vhost,
         status.App,
         status.Stream,
         status.State.ToString().ToLowerInvariant(),
         status.Formats.HasFlag(RecordFormat.Mp4),
         status.Formats.HasFlag(RecordFormat.Flv),
-        status.Mp4Path,
-        status.FlvPath,
+        ToRecordUrlPath(status.Mp4Path, options),
+        ToRecordUrlPath(status.FlvPath, options),
         status.Frames,
         status.DurationMs,
         status.StartedAt.ToUnixTimeSeconds(),
-        status.Error);
+        status.Error,
+        ToRecordUrlPath(status.HlsPath, options));
+
+    /// <summary>
+    /// 文件系统绝对路径 → 相对录像根目录的归一化路径（<c>/</c> 分隔、无盘符/前缀），
+    /// 前端拼 <c>/record/{path}</c> 即可访问；越界或未配置时返回 null。
+    /// </summary>
+    private static string? ToRecordUrlPath(string? absolutePath, AppOptions options)
+    {
+        if (string.IsNullOrEmpty(absolutePath))
+        {
+            return null;
+        }
+
+        var root = RecordPaths.ResolveRoot(options);
+        var full = Path.GetFullPath(absolutePath);
+        var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(full, root, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var relative = Path.GetRelativePath(root, full);
+        return relative == "." ? null : relative.Replace('\\', '/');
+    }
+
+    /// <summary>录像任务列表（<c>getRecordList</c>）。</summary>
+    private static async Task GetRecordListAsync(HttpContext context, AppOptions options, RecorderManager? recorder)
+    {
+        if (!await AuthorizeAsync(context, options))
+        {
+            return;
+        }
+
+        LogRequest(context, options, "getRecordList");
+
+        var query = context.Request.Query;
+        ApiRecordData[] data = recorder is null
+            ? []
+            : recorder
+                .List(query["vhost"].ToString(), query["app"].ToString(), query["stream"].ToString())
+                .Select(item => ToApiRecord(item, options))
+                .ToArray();
+
+        await WriteJsonAsync(context, new ApiRecordListResponse(0, data), ApiJsonContext.Default.ApiRecordListResponse);
+    }
 
     /// <summary>RTMP 转推：把本地 <c>app/stream</c> 推到 <c>url=rtmp://host/app/stream</c>。</summary>
     private static async Task StartPushAsync(HttpContext context, AppOptions options, RtmpPushManager? pushes)
@@ -1250,13 +1302,44 @@ public static class ApiEndpoints
         var period = context.Request.Query["period"].ToString();
         var path = context.Request.Query["path"].ToString();
 
-        var paths = files.List(app, stream, period, path.Length == 0 ? null : path);
+        // rootPath 也归一化：相对录像根目录的目录路径，前端拼 /record/{rootPath}/{name} 访问
+        var result = files.Browse(app, stream, period, path.Length == 0 ? null : path);
 
         await WriteJsonAsync(
             context,
-            new ApiRecordFileResponse(0, new ApiRecordFileData(files.Root, paths)),
+            new ApiRecordFileResponse(0, new ApiRecordFileData(result.RootPath, result.Entries, result.Directories)),
             ApiJsonContext.Default.ApiRecordFileResponse);
     }
+
+    /// <summary>
+    /// 录像文件下载/播放：<c>/record/{相对路径}</c>（相对录像根目录），支持 Range 拖动。
+    /// 不做 secret 校验，与直播拉流一致，浏览器可直接用 video 标签播放。
+    /// </summary>
+    private static async Task ServeRecordFileAsync(HttpContext context, RecordFileService? files)
+    {
+        var relative = context.Request.RouteValues["path"]?.ToString();
+        var full = files?.ResolveFile(relative);
+        if (full is null || !File.Exists(full))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        var contentType = RecordContentType(Path.GetExtension(full));
+        await Results
+            .File(full, contentType, enableRangeProcessing: true)
+            .ExecuteAsync(context);
+    }
+
+    private static string RecordContentType(string extension) => extension.ToLowerInvariant() switch
+    {
+        ".mp4" => "video/mp4",
+        ".flv" => "video/x-flv",
+        ".ts" => "video/mp2t",
+        ".m3u8" => "application/vnd.apple.mpegurl",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        _ => "application/octet-stream",
+    };
 
     /// <summary>删除录像文件：<c>path</c>（相对录像根目录）或 <c>app/stream/period/file_name</c>。</summary>
     private static async Task DeleteRecordFileAsync(

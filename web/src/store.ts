@@ -1,12 +1,14 @@
 import { reactive } from 'vue'
 import { call } from './api'
-import type { MediaInfo, VersionInfo } from './types'
+import type { MediaInfo, RecordState, VersionInfo } from './types'
 
 export const state = reactive({
   version: null as VersionInfo | null,
   versionError: '',
   media: [] as MediaInfo[],
   mediaError: '',
+  /** 录像任务（含录制中的流），与在线流一起 5s 轮询 */
+  recordings: [] as RecordState[],
   loading: false,
   updatedAt: 0,
 })
@@ -31,6 +33,13 @@ export async function refresh() {
       state.mediaError = ''
     } catch (error) {
       state.mediaError = message(error)
+    }
+
+    // 录像未启用时返回空数组，不当作错误
+    try {
+      state.recordings = await call<RecordState[]>('getRecordList')
+    } catch {
+      state.recordings = []
     }
 
     state.updatedAt = Date.now()

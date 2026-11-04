@@ -32,11 +32,6 @@ export interface SessionInfo {
   userAgent?: string | null
 }
 
-export interface RecordFileData {
-  rootPath: string
-  paths: string[]
-}
-
 export interface RecordState {
   vhost: string
   app: string
@@ -44,12 +39,22 @@ export interface RecordState {
   state: string
   mp4: boolean
   flv: boolean
+  /** 相对录像根目录的归一化路径（'/' 分隔），拼 /record/ 即可访问 */
   mp4Path?: string | null
   flvPath?: string | null
+  hlsPath?: string | null
   frames: number
   durationMs: number
   startedAt: number
   error?: string | null
+}
+
+export interface RecordFileData {
+  /** 相对录像根目录的目录路径（'/' 分隔） */
+  rootPath: string
+  /** directories=true 时是子目录名，否则是文件名 */
+  paths: string[]
+  directories: boolean
 }
 
 export interface PushState {

@@ -44,6 +44,12 @@ public sealed record RecordingStatus(
     public bool Recording => State is RecordingState.Starting or RecordingState.Recording;
 }
 
+/// <summary>
+/// 录像目录浏览结果：<see cref="RootPath"/> 是相对录像根目录的归一化路径（<c>/</c> 分隔）；
+/// <see cref="Directories"/> 为 true 表示 <see cref="Entries"/> 是子目录名，否则是文件名。
+/// </summary>
+public sealed record RecordBrowseResult(string RootPath, IReadOnlyList<string> Entries, bool Directories);
+
 /// <summary>按 ZLM 习惯把 <c>startRecord.type</c> 映射为格式：1=MP4，2=FLV，3=两者，4=HLS，5=全部。</summary>
 public static class RecordFormats
 {

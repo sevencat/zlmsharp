@@ -70,8 +70,9 @@ All responses follow ZLM's `{"code":0,"msg":"success","data":...}` envelope. `GE
 | `getMediaList` | Online streams: codec, resolution, fps, reader count, uptime, `originType`, `dropFrames`; filters `vhost`/`app`/`stream`/`schema` |
 | `close_streams` | Close matching streams, returns `count` / `closed` |
 | `getSessionList`, `kick_session` | Inspect or kick publish/play sessions (by `id=` or filters) |
-| `startRecord`, `stopRecord`, `isRecording` | Recording control: `type=1` MP4, `2` FLV, `3` MP4+FLV, `4` HLS, `5` all |
-| `getMp4RecordFile`, `deleteRecordFile` | List / delete recorded files (`app`+`stream`+`period`+`path`), path-escape safe |
+| `startRecord`, `stopRecord`, `isRecording`, `getRecordList` | Recording control and task list: `type=1` MP4, `2` FLV, `3` MP4+FLV, `4` HLS, `5` all |
+| `getMp4RecordFile`, `deleteRecordFile` | Browse / delete recorded files (`app`+`stream`+`period`+`path`), path-escape safe |
+| `GET /record/{relative path}` | Play / download a recorded file (Range supported); path is relative to the record root, no secret required |
 | `startPush`, `stopPush`, `getPushList` | RTMP relay push |
 | `addStreamProxy`, `delStreamProxy`, `getProxyList` | Pull proxy (RTMP/RTSP source → local stream), list includes source URL and online state |
 | `yoloInfo`, `yoloDetect`, `getYoloResult` | YOLO model info, one-shot detection, latest periodic result (compat endpoints backed by the analyzer layer) |
@@ -103,6 +104,7 @@ list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/liv
 ## Recording
 
 - `startRecord?app=&stream=&type=&max_second=` starts recording an online stream; files land in `ZLM_RECORD_ROOT` (fallback `protocol.mp4_save_path`) under `app/stream/yyyy-MM-dd/`.
+- `mp4Path` / `flvPath` / `hlsPath` in API responses are **normalized paths relative to the record root** (`/` separated, no drive letter or prefix, e.g. `live/cam/2026-11-04/20-15-08-001.mp4`); append to `http://host:port/record/` to play or download (same for `rootPath` from `getMp4RecordFile`).
 - MP4 samples use AVCC (`avcC` + `esds`), FLV is append-only (survives crashes), HLS writes `hls-000001.ts…` + `hls.m3u8` aligned on key frames (`[hls] seg_duration`, `seg_num`).
 - Recording resumes automatically after a publisher reconnectes; `protocol.enable_mp4` / `enable_flv_record` enable always-on recording at startup (`*_ai` overlay streams are skipped).
 
