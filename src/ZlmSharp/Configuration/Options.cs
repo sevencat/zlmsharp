@@ -47,6 +47,18 @@ public sealed class GeneralOptions
 
     public int MergeWriteMS { get; set; }
 
+    /// <summary>
+    /// 直播播放端新观众补发 GOP 的时间窗口（毫秒），0 = 补发完整 GOP。
+    /// 调小可降低播放常驻延迟（延迟 ≈ 相机 GOP 长度），代价是窗口内没有关键帧时要等下一个关键帧才出画。
+    /// </summary>
+    public int GopCacheMS { get; set; }
+
+    /// <summary>
+    /// 直播播放端队列积压超过该帧数时丢弃积压并跳到最近关键帧（追赶实时），0 = 不追赶。
+    /// 建议值 150~300（约 5~10 秒积压才触发）。
+    /// </summary>
+    public int CatchUpPendingFrames { get; set; }
+
     public string MediaServerId { get; set; } = "your_server_id";
 
     public string ListenIp { get; set; } = "::";

@@ -37,6 +37,8 @@ public static class ConfigSchema
         new("general", "streamNoneReaderDelayMS", ConfigValueKind.Int, "无人观看延迟关闭时间(ms)"),
         new("general", "resetWhenRePlay", ConfigValueKind.Bool, "重新播放时是否重置时间戳"),
         new("general", "mergeWriteMS", ConfigValueKind.Int, "合并写毫秒"),
+        new("general", "gop_cache_ms", ConfigValueKind.Int, "直播补发 GOP 时间窗口(ms)，0 为完整 GOP"),
+        new("general", "catch_up_pending_frames", ConfigValueKind.Int, "直播积压帧数超过该值丢弃积压追赶实时，0 关闭"),
         new("general", "mediaServerId", ConfigValueKind.String, "媒体服务器 id"),
         new("general", "listen_ip", ConfigValueKind.String, "监听 ip，多个用逗号分隔"),
         new("general", "wait_track_ready_ms", ConfigValueKind.Int, "等待 track ready 时间(ms)"),

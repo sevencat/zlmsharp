@@ -10,6 +10,7 @@ public sealed class MediaSink : IDisposable
 {
     private readonly Channel<MediaFrame> _channel;
     private int _closed;
+    private int _waitKeyFrame;
     private long _droppedFrames;
 
     public MediaSink(MediaSource source, int capacity)
@@ -29,16 +30,36 @@ public sealed class MediaSink : IDisposable
 
     public int PendingCount => _channel.Reader.Count;
 
-    /// <summary>因队列满/已关闭而丢弃的帧数。</summary>
+    /// <summary>因队列满/已关闭/追赶丢帧而丢弃的帧数。</summary>
     public long DroppedFrames => Volatile.Read(ref _droppedFrames);
 
     public bool IsClosed => Volatile.Read(ref _closed) != 0;
+
+    /// <summary>是否允许积压超限时丢弃积压追赶实时（仅直播播放端）。</summary>
+    public bool AllowCatchUp { get; internal set; }
+
+    /// <summary>是否正在等下一个关键帧（此期间非关键帧一律丢弃，避免花屏）。</summary>
+    public bool IsWaitingKeyFrame => Volatile.Read(ref _waitKeyFrame) != 0;
 
     public bool Push(MediaFrame frame)
     {
         if (IsClosed || !frame.TryAddRef())
         {
             return false;
+        }
+
+        if (Volatile.Read(ref _waitKeyFrame) != 0)
+        {
+            if (frame.TrackType == TrackType.Video && frame.IsKeyFrame)
+            {
+                Volatile.Write(ref _waitKeyFrame, 0);
+            }
+            else
+            {
+                frame.Dispose();
+                Interlocked.Increment(ref _droppedFrames);
+                return false;
+            }
         }
 
         if (_channel.Writer.TryWrite(frame))
@@ -50,6 +71,25 @@ public sealed class MediaSink : IDisposable
         Interlocked.Increment(ref _droppedFrames);
         return false;
     }
+
+    /// <summary>丢弃队列里尚未发送的帧（用于追赶实时），随后配合 <see cref="WaitKeyFrame"/>。</summary>
+    public void DropBacklog()
+    {
+        var dropped = 0;
+        while (_channel.Reader.TryRead(out var frame))
+        {
+            frame?.Dispose();
+            dropped++;
+        }
+
+        if (dropped > 0)
+        {
+            Interlocked.Add(ref _droppedFrames, dropped);
+        }
+    }
+
+    /// <summary>从现在起丢弃非关键帧，直到下一个关键帧到达。</summary>
+    public void WaitKeyFrame() => Volatile.Write(ref _waitKeyFrame, 1);
 
     public IAsyncEnumerable<MediaFrame> ReadAllAsync(CancellationToken cancellationToken = default) =>
         _channel.Reader.ReadAllAsync(cancellationToken);

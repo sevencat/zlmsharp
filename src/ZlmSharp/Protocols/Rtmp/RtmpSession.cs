@@ -664,7 +664,7 @@ public sealed class RtmpSession
         }
 
         // CreateReader 会立刻把 GOP 快照塞进队列，保证秒开
-        var sink = source.CreateReader();
+        var sink = source.CreateReader(livePlayback: true);
         _playSink = sink;
         _playCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var playToken = _playCts.Token;

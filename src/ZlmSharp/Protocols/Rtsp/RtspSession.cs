@@ -515,7 +515,7 @@ public sealed class RtspSession
 
     private void StartPlayback(MediaSource source, CancellationToken cancellationToken)
     {
-        var sink = source.CreateReader();
+        var sink = source.CreateReader(livePlayback: true);
         _sink = sink;
         _lastRtcpTicks = 0;
         _rtpPacketCount = 0;

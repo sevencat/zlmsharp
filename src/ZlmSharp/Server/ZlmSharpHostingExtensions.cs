@@ -35,7 +35,12 @@ public static class ZlmSharpHostingExtensions
         // 管理页面授权：默认按 [api] pageToken 校验；宿主可注册自己的 IAdminPageAuthorizer 覆盖
         services.TryAddSingleton<ZlmSharp.Server.IAdminPageAuthorizer, ZlmSharp.Server.StaticTokenPageAuthorizer>();
         services.AddSingleton(provider => new ZlmSharp.Core.MediaSourceRegistry(
-            provider.GetService<ILoggerFactory>()?.CreateLogger("ZlmSharp.Media")));
+            provider.GetService<ILoggerFactory>()?.CreateLogger("ZlmSharp.Media"),
+            new ZlmSharp.Core.MediaSourceOptions
+            {
+                GopCacheMs = runtime.Options.General.GopCacheMS,
+                CatchUpPendingFrames = runtime.Options.General.CatchUpPendingFrames,
+            }));
         services.AddSingleton(provider => new ZlmSharp.Core.MediaSessionRegistry(
             provider.GetService<ILoggerFactory>()?.CreateLogger("ZlmSharp.Session")));
         services.AddSingleton<Hooks.MediaHookService>();

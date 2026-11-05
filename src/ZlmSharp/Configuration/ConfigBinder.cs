@@ -15,6 +15,8 @@ public static class ConfigBinder
         general.StreamNoneReaderDelayMS = document.GetInt("general", "streamNoneReaderDelayMS", general.StreamNoneReaderDelayMS);
         general.ResetWhenRePlay = document.GetBool("general", "resetWhenRePlay", general.ResetWhenRePlay);
         general.MergeWriteMS = document.GetInt("general", "mergeWriteMS", general.MergeWriteMS);
+        general.GopCacheMS = document.GetInt("general", "gop_cache_ms", general.GopCacheMS);
+        general.CatchUpPendingFrames = document.GetInt("general", "catch_up_pending_frames", general.CatchUpPendingFrames);
         general.MediaServerId = document.GetString("general", "mediaServerId", general.MediaServerId);
         general.ListenIp = document.GetString("general", "listen_ip", general.ListenIp);
         general.WaitTrackReadyMS = document.GetInt("general", "wait_track_ready_ms", general.WaitTrackReadyMS);

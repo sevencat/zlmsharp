@@ -23,7 +23,7 @@ internal static class FlvLiveStream
         CancellationToken cancellationToken,
         bool enhancedRtmp = false)
     {
-        var sink = source.CreateReader();
+        var sink = source.CreateReader(livePlayback: true);
 
         // 音频配置必须在构造 muxer 时就带上：AAC sequence header 通常只在推流开始时出现一次，
         // 中途加入的观众拿不到，mpegts.js / flv.js 会因为没有解码配置而静音。

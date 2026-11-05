@@ -17,6 +17,20 @@ public sealed class MediaSourceOptions
     /// （8 秒 @25fps 视频 200 帧 + AAC 48kHz 375 帧 ≈ 575），否则补发时就会丢帧。
     /// </summary>
     public int ReaderQueueCapacity { get; init; } = 1024;
+
+    /// <summary>
+    /// 直播播放端新观众补发 GOP 的时间窗口（毫秒），0 = 补发完整 GOP。
+    /// 补发历史越长，播放器一开始就落后越多（延迟 ≈ 相机 GOP 长度）；
+    /// 设小（如 1000）可降低常驻延迟，代价是窗口内没有关键帧时要等下一个关键帧才出画。
+    /// 录制/转推不受影响，始终拿完整 GOP。
+    /// </summary>
+    public int GopCacheMs { get; init; }
+
+    /// <summary>
+    /// 直播播放端队列积压超过该帧数时，丢弃积压并跳到最近的关键帧（追赶实时），0 = 不追赶。
+    /// 只在播放端网络/解码变慢时生效，避免延迟随积压无限累积（队列满时默认会丢新帧、延迟只增不减）。
+    /// </summary>
+    public int CatchUpPendingFrames { get; init; }
 }
 
 /// <summary>
@@ -135,11 +149,16 @@ public sealed class MediaSource : IDisposable
     public event Action<MediaSource>? Closed;
 
     /// <summary>注册一个观看者，并立即补发 GOP（从关键帧起），保证秒开。</summary>
-    public MediaSink CreateReader()
+    /// <param name="livePlayback">
+    /// true = 直播播放端：补发窗口受 <see cref="MediaSourceOptions.GopCacheMs"/> 限制，
+    /// 且积压超限时会丢弃积压追赶实时。录制/转推应传 false，始终拿完整 GOP。
+    /// </param>
+    public MediaSink CreateReader(bool livePlayback = false)
     {
         var sink = new MediaSink(this, _options.ReaderQueueCapacity)
         {
             Id = Interlocked.Increment(ref _nextSinkId),
+            AllowCatchUp = livePlayback,
         };
 
         int count;
@@ -158,7 +177,16 @@ public sealed class MediaSource : IDisposable
 
         Interlocked.Increment(ref _totalReaderCount);
 
-        foreach (var frame in SnapshotGop())
+        var gop = SnapshotGop(livePlayback ? _options.GopCacheMs : 0);
+        if (gop.Count == 0 && livePlayback)
+        {
+            // 窗口内没有关键帧：丢掉注册瞬间已排队的帧，从下一个关键帧开始发，
+            // 否则观众会先收到一串没有参考帧的 P 帧（花屏）
+            sink.DropBacklog();
+            sink.WaitKeyFrame();
+        }
+
+        foreach (var frame in gop)
         {
             sink.Push(frame);
             frame.Dispose();
@@ -226,8 +254,16 @@ public sealed class MediaSource : IDisposable
 
         if (sinks is not null)
         {
+            var catchUp = _options.CatchUpPendingFrames;
             foreach (var sink in sinks)
             {
+                if (catchUp > 0 && sink.AllowCatchUp && sink.PendingCount >= catchUp)
+                {
+                    // 播放端跟不上：丢掉积压，从下一个关键帧续上，避免延迟一直累积
+                    sink.DropBacklog();
+                    sink.WaitKeyFrame();
+                }
+
                 sink.Push(frame);
             }
         }
@@ -236,7 +272,11 @@ public sealed class MediaSource : IDisposable
     }
 
     /// <summary>取 GOP 快照（调用方负责 Dispose 每个帧）。</summary>
-    public IReadOnlyList<MediaFrame> SnapshotGop()
+    /// <param name="maxAgeMs">
+    /// 只接受最近该毫秒内的关键帧；关键帧更老时返回空（调用方等下一个关键帧）。0 = 不限制。
+    /// 用于直播播放端压低补发历史带来的常驻延迟。
+    /// </param>
+    public IReadOnlyList<MediaFrame> SnapshotGop(int maxAgeMs = 0)
     {
         var result = new List<MediaFrame>();
         lock (_gate)
@@ -246,6 +286,7 @@ public sealed class MediaSource : IDisposable
                 return result;
             }
 
+            var newestDts = _ring[^1].Dts;
             var start = 0;
             var lastKeyIndex = -1;
             for (var index = _ring.Count - 1; index >= 0; index--)
@@ -262,6 +303,12 @@ public sealed class MediaSource : IDisposable
             {
                 // 缓冲内没有关键帧（源 GOP 比环形缓冲还长）：宁可补发空，让观众等下一个关键帧，
                 // 也不要发一串没有参考帧的 P 帧——那会让播放器花屏/报 reference picture missing。
+                return result;
+            }
+
+            if (maxAgeMs > 0 && newestDts - _ring[lastKeyIndex].Dts > maxAgeMs)
+            {
+                // 关键帧太老：补发它会让播放器一开始就落后一个 GOP，改由调用方等下一个关键帧
                 return result;
             }
 

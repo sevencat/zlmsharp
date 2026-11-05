@@ -8,8 +8,13 @@ public sealed class MediaSourceRegistry
 {
     private readonly ConcurrentDictionary<StreamKey, MediaSource> _sources = new();
     private readonly ILogger? _logger;
+    private readonly MediaSourceOptions? _sourceOptions;
 
-    public MediaSourceRegistry(ILogger? logger = null) => _logger = logger;
+    public MediaSourceRegistry(ILogger? logger = null, MediaSourceOptions? sourceOptions = null)
+    {
+        _logger = logger;
+        _sourceOptions = sourceOptions;
+    }
 
     public int Count => _sources.Count;
 
@@ -36,7 +41,7 @@ public sealed class MediaSourceRegistry
                 continue;
             }
 
-            var created = factory?.Invoke() ?? new MediaSource(key, schema, originType: originType);
+            var created = factory?.Invoke() ?? new MediaSource(key, schema, _sourceOptions, originType);
             if (_sources.TryAdd(key, created))
             {
                 return created;

@@ -31,6 +31,10 @@ public static class DefaultConfig
         streamNoneReaderDelayMS=20000
         resetWhenRePlay=1
         mergeWriteMS=0
+        # 直播播放端补发 GOP 时间窗口(ms)：0=完整 GOP（秒开但延迟≈相机 GOP）；设 1000 可降低延迟
+        gop_cache_ms=0
+        # 直播播放端队列积压超过该帧数就丢弃积压跳到最近关键帧(追赶实时)；0=关闭，建议 150~300
+        catch_up_pending_frames=0
         mediaServerId=your_server_id
         listen_ip=::
         wait_track_ready_ms=10000
