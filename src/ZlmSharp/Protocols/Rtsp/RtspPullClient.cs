@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
 using ZlmSharp.Codecs;
@@ -46,7 +47,7 @@ public static class RtspPullClient
         }
 
         var segments = url.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length < 2)
+        if (segments.Length == 0)
         {
             return false;
         }
@@ -60,9 +61,14 @@ public static class RtspPullClient
             vhost = Uri.UnescapeDataString(segments[0]);
             app = string.Join('/', segments[1..^1].Select(Uri.UnescapeDataString));
         }
-        else
+        else if (segments.Length == 2)
         {
             app = Uri.UnescapeDataString(segments[0]);
+        }
+        else
+        {
+            // 单段路径（如 rtsp://host:8554/test）：本地 key 由调用方的 app/stream 决定，这里 app 复用该段
+            app = stream;
         }
 
         return app.Length > 0 && stream.Length > 0;
@@ -103,8 +109,10 @@ public static class RtspPullClient
         await using var stream = client.GetStream();
         var reader = new RtspPullReader(stream);
         var writeLock = new SemaphoreSlim(1, 1);
-        var baseUri = url.ToString();
-        var authorization = BuildAuthorization(url);
+        // 请求 URI 不带 userinfo（凭据只放 Authorization 头），
+        // 兼容 rtsp://admin:pass@1..@host/... 这类密码带特殊字符的地址
+        var baseUri = BuildRequestUri(url);
+        var authenticator = RtspAuthenticator.FromUrl(url);
         var cseq = 0;
 
         async Task<RtspPullResponse> RequestAsync(
@@ -113,12 +121,12 @@ public static class RtspPullClient
             IEnumerable<(string Name, string Value)> headers,
             CancellationToken token)
         {
-            var text = BuildRequest(++cseq, method, uri, settings.UserAgent, authorization, headers);
+            var text = BuildRequest(++cseq, method, uri, settings.UserAgent, authenticator.GetHeader(method, uri), headers);
             await WriteAsync(stream, writeLock, Encoding.UTF8.GetBytes(text), token).ConfigureAwait(false);
             return await reader.ReadResponseAsync(token).ConfigureAwait(false);
         }
 
-        // DESCRIBE
+        // DESCRIBE（401 时按 WWW-Authenticate 质询切换 Digest/Basic 后重试一次）
         RtspPullResponse describe;
         using (var describeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
@@ -131,9 +139,25 @@ public static class RtspPullClient
                 .ConfigureAwait(false);
         }
 
+        if (describe.StatusCode == 401 &&
+            authenticator.Challenge(describe.Header("WWW-Authenticate")))
+        {
+            using (var describeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                describeCts.CancelAfter(settings.DescribeTimeout);
+                describe = await RequestAsync(
+                        "DESCRIBE",
+                        baseUri,
+                        [("Accept", "application/sdp")],
+                        describeCts.Token)
+                    .ConfigureAwait(false);
+            }
+        }
+
         if (describe.StatusCode != 200)
         {
-            throw new InvalidOperationException($"RTSP DESCRIBE 失败：{describe.StatusCode} {describe.Reason}");
+            var hint = describe.StatusCode == 401 ? "（用户名/密码错误，或认证方式不支持）" : string.Empty;
+            throw new InvalidOperationException($"RTSP DESCRIBE 失败：{describe.StatusCode} {describe.Reason}{hint}");
         }
 
         if (!SdpParser.TryParse(describe.Body, out var description, out var sdpError) || description is null)
@@ -204,7 +228,7 @@ public static class RtspPullClient
                     stream,
                     writeLock,
                     settings,
-                    authorization,
+                    authenticator,
                     baseUri,
                     session,
                     settings.KeepAliveInterval,
@@ -224,7 +248,7 @@ public static class RtspPullClient
             try
             {
                 using var teardownCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                var text = BuildRequest(++cseq, "TEARDOWN", baseUri, settings.UserAgent, authorization, [("Session", session)]);
+                var text = BuildRequest(++cseq, "TEARDOWN", baseUri, settings.UserAgent, authenticator.GetHeader("TEARDOWN", baseUri), [("Session", session)]);
                 await WriteAsync(stream, writeLock, Encoding.UTF8.GetBytes(text), teardownCts.Token).ConfigureAwait(false);
             }
             catch (Exception)
@@ -585,7 +609,7 @@ public static class RtspPullClient
         Stream stream,
         SemaphoreSlim writeLock,
         RtspPullOptions settings,
-        string? authorization,
+        RtspAuthenticator authenticator,
         string baseUri,
         string session,
         TimeSpan interval,
@@ -610,7 +634,7 @@ public static class RtspPullClient
                     "GET_PARAMETER",
                     baseUri,
                     settings.UserAgent,
-                    authorization,
+                    authenticator.GetHeader("GET_PARAMETER", baseUri),
                     [("Session", session)]);
                 await WriteAsync(stream, writeLock, Encoding.UTF8.GetBytes(text), cancellationToken)
                     .ConfigureAwait(false);
@@ -665,7 +689,7 @@ public static class RtspPullClient
         return builder.ToString();
     }
 
-    private static string? BuildAuthorization(Uri url)
+    internal static (string Username, string Password)? GetCredentials(Uri url)
     {
         if (string.IsNullOrEmpty(url.UserInfo))
         {
@@ -673,7 +697,23 @@ public static class RtspPullClient
         }
 
         var userInfo = Uri.UnescapeDataString(url.UserInfo);
-        return "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(userInfo));
+        var colon = userInfo.IndexOf(':');
+        return colon < 0
+            ? (userInfo, string.Empty)
+            : (userInfo[..colon], userInfo[(colon + 1)..]);
+    }
+
+    /// <summary>生成不带 userinfo 的请求 URI：<c>rtsp://host[:port]/path[?query]</c>。</summary>
+    private static string BuildRequestUri(Uri url)
+    {
+        var port = url.IsDefaultPort ? string.Empty : $":{url.Port}";
+        var pathAndQuery = url.PathAndQuery;
+        if (pathAndQuery.Length == 0 || pathAndQuery[0] != '/')
+        {
+            pathAndQuery = "/" + pathAndQuery;
+        }
+
+        return $"{url.Scheme}://{url.Host}{port}{pathAndQuery}";
     }
 
     private static string CombineUri(string baseUri, string control)
@@ -977,4 +1017,183 @@ internal sealed class RtspPullReader
             read += count;
         }
     }
+}
+
+/// <summary>
+/// RTSP 拉流认证：先用 URL 里的 Basic 凭据主动认证，
+/// 收到 401 质询（海康等相机常用 Digest）后切换并重试，之后所有请求都带认证头。
+/// </summary>
+internal sealed class RtspAuthenticator
+{
+    private readonly (string Username, string Password)? _credentials;
+    private readonly string? _basic;
+    private DigestChallenge? _digest;
+    private uint _nc;
+
+    private RtspAuthenticator((string Username, string Password)? credentials)
+    {
+        _credentials = credentials;
+        _basic = credentials is { } value
+            ? "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{value.Username}:{value.Password}"))
+            : null;
+    }
+
+    public static RtspAuthenticator FromUrl(Uri url) => new(RtspPullClient.GetCredentials(url));
+
+    /// <summary>收到 401 质询时切换认证方式；返回是否可以重试。</summary>
+    public bool Challenge(string? wwwAuthenticate)
+    {
+        if (string.IsNullOrWhiteSpace(wwwAuthenticate))
+        {
+            return false;
+        }
+
+        var header = wwwAuthenticate.Trim();
+        var space = header.IndexOf(' ');
+        var scheme = (space < 0 ? header : header[..space]).Trim();
+
+        if (!scheme.Equals("Digest", StringComparison.OrdinalIgnoreCase))
+        {
+            // Basic 质询：继续用 URL 凭据重试一次
+            return _basic is not null;
+        }
+
+        var credentials = _credentials;
+        if (credentials is null)
+        {
+            return false;
+        }
+
+        _digest = DigestChallenge.Parse(credentials.Value.Username, credentials.Value.Password, header[(space + 1)..]);
+        _nc = 0;
+        return true;
+    }
+
+    public string GetHeader(string method, string uri)
+    {
+        if (_digest is not null)
+        {
+            _nc = _nc >= 99999999u ? 1u : _nc + 1;
+            return _digest.Build(method, uri, _nc);
+        }
+
+        return _basic ?? string.Empty;
+    }
+}
+
+/// <summary>RTSP Digest 质询参数与 Authorization 头生成（RFC 2069/2617，MD5，qop=auth）。</summary>
+internal sealed class DigestChallenge
+{
+    private readonly string _username;
+    private readonly string _password;
+    private readonly string _realm;
+    private readonly string _nonce;
+    private readonly string? _opaque;
+    private readonly string _qop;
+
+    private DigestChallenge(string username, string password, string realm, string nonce, string? opaque, string qop)
+    {
+        _username = username;
+        _password = password;
+        _realm = realm;
+        _nonce = nonce;
+        _opaque = opaque;
+        _qop = qop;
+    }
+
+    public static DigestChallenge Parse(string username, string password, string text)
+    {
+        var parameters = ParseParameters(text);
+        parameters.TryGetValue("realm", out var realm);
+        parameters.TryGetValue("nonce", out var nonce);
+        parameters.TryGetValue("qop", out var qop);
+        parameters.TryGetValue("opaque", out var opaque);
+        return new DigestChallenge(username, password, realm ?? string.Empty, nonce ?? string.Empty, opaque, qop ?? string.Empty);
+    }
+
+    public string Build(string method, string uri, uint nc)
+    {
+        // qop 是列表（如 "auth,auth-int"）时选 auth
+        var qop = _qop
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(item => item.Equals("auth", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+        var cnonce = Random.Shared.Next().ToString("x8", CultureInfo.InvariantCulture);
+
+        var ha1 = Md5Hex($"{_username}:{_realm}:{_password}");
+        var ha2 = Md5Hex($"{method}:{uri}");
+        var response = qop.Length == 0
+            ? Md5Hex($"{ha1}:{_nonce}:{ha2}")
+            : Md5Hex($"{ha1}:{_nonce}:{nc:00000000}:{cnonce}:{qop}:{ha2}");
+
+        var builder = new StringBuilder(256);
+        builder.Append("Digest username=\"").Append(Escape(_username)).Append('"');
+        builder.Append(", realm=\"").Append(Escape(_realm)).Append('"');
+        builder.Append(", nonce=\"").Append(Escape(_nonce)).Append('"');
+        builder.Append(", uri=\"").Append(Escape(uri)).Append('"');
+        builder.Append(", response=\"").Append(response).Append('"');
+
+        if (!string.IsNullOrEmpty(_opaque))
+        {
+            builder.Append(", opaque=\"").Append(Escape(_opaque)).Append('"');
+        }
+
+        if (qop.Length > 0)
+        {
+            builder.Append(", qop=auth");
+            builder.Append(", nc=").AppendFormat(CultureInfo.InvariantCulture, "{0:00000000}", nc);
+            builder.Append(", cnonce=\"").Append(cnonce).Append('"');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>解析质询参数，值可能带引号、内容可能含逗号。</summary>
+    private static Dictionary<string, string> ParseParameters(string text)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var inQuote = false;
+        var start = 0;
+        var items = new List<string>();
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '"')
+            {
+                inQuote = !inQuote;
+            }
+            else if (c == ',' && !inQuote)
+            {
+                items.Add(text[start..i]);
+                start = i + 1;
+            }
+        }
+
+        items.Add(text[start..]);
+        foreach (var item in items)
+        {
+            var eq = item.IndexOf('=');
+            if (eq <= 0)
+            {
+                continue;
+            }
+
+            var key = item[..eq].Trim();
+            var value = item[(eq + 1)..].Trim();
+            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+            {
+                value = value[1..^1];
+            }
+
+            map[key] = value;
+        }
+
+        return map;
+    }
+
+    private static string Escape(string value) => value.Replace("\"", "\\\"");
+
+    private static string Md5Hex(string value) =>
+        Convert.ToHexString(System.Security.Cryptography.MD5.HashData(Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
 }

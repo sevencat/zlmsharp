@@ -197,12 +197,42 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
         _shutdown.Dispose();
     }
 
+    /// <summary>
+    /// 规范化拉流地址：把 userinfo 里的 <c>@</c>、<c>/</c>、<c>?</c>、<c>#</c> 百分号编码，
+    /// 兼容 <c>rtsp://admin:pass@1..@host:554/...</c> 这类密码带特殊字符的地址。
+    /// </summary>
+    public static string NormalizeUrl(string url)
+    {
+        var schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
+        if (schemeEnd <= 0)
+        {
+            return url;
+        }
+
+        var authorityStart = schemeEnd + 3;
+        var pathStart = url.IndexOf('/', authorityStart);
+        var authority = pathStart < 0 ? url[authorityStart..] : url[authorityStart..pathStart];
+        var at = authority.LastIndexOf('@');
+        if (at <= 0 || at == authority.Length - 1)
+        {
+            return url;
+        }
+
+        var userinfo = authority[..at]
+            .Replace("@", "%40")
+            .Replace("/", "%2F")
+            .Replace("?", "%3F")
+            .Replace("#", "%23");
+        var rest = pathStart < 0 ? string.Empty : url[pathStart..];
+        return url[..authorityStart] + userinfo + "@" + authority[(at + 1)..] + rest;
+    }
+
     private static bool TryResolve(string url, out Uri uri, out PullProtocol protocol)
     {
         uri = null!;
         protocol = PullProtocol.Rtmp;
 
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed))
+        if (!Uri.TryCreate(NormalizeUrl(url), UriKind.Absolute, out var parsed))
         {
             return false;
         }
