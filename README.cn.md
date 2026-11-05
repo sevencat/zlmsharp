@@ -6,6 +6,9 @@
 
 [English](README.md) | **简体中文**
 
+[![NuGet](https://img.shields.io/nuget/v/Sevencat.ZlmSharp.MediaServer?label=nuget&color=blue)](https://www.nuget.org/packages/Sevencat.ZlmSharp.MediaServer)
+[![NuGet downloads](https://img.shields.io/nuget/dt/Sevencat.ZlmSharp.MediaServer?label=downloads)](https://www.nuget.org/packages/Sevencat.ZlmSharp.MediaServer)
+
 - RTMP 推/播（HEVC 走 Enhanced RTMP 的 `hvc1` 扩展头）、RTSP 推/播（TCP interleaved + UDP）、HTTP-FLV、WebSocket-FLV；视频 H.264 / H.265
 - 每路流一个 `MediaSource`：环形缓冲、GOP 快照、按读者分发并统计各读者丢帧
 - MP4 / FLV / HLS(TS) 录制、RTMP 转推、RTSP/RTMP 拉流代理

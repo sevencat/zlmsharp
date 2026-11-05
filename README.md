@@ -6,6 +6,9 @@ A C#/.NET 8 port of the [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit) s
 
 **English** | [简体中文](README.cn.md)
 
+[![NuGet](https://img.shields.io/nuget/v/Sevencat.ZlmSharp.MediaServer?label=nuget&color=blue)](https://www.nuget.org/packages/Sevencat.ZlmSharp.MediaServer)
+[![NuGet downloads](https://img.shields.io/nuget/dt/Sevencat.ZlmSharp.MediaServer?label=downloads)](https://www.nuget.org/packages/Sevencat.ZlmSharp.MediaServer)
+
 - RTMP publish / play (HEVC via the Enhanced RTMP `hvc1` ex-header), RTSP publish / play (TCP interleaved + UDP), HTTP-FLV, WebSocket-FLV; video is H.264 / H.265
 - One `MediaSource` per stream: ring buffer, GOP snapshot, frame-level fan-out with per-reader drop accounting
 - MP4 / FLV / HLS(TS) recording, RTMP relay push, RTSP/RTMP pull proxy
