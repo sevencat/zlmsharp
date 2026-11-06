@@ -26,7 +26,7 @@ internal sealed class OnDemandProxyService : BackgroundService, IOnDemandProxy
     private readonly MediaSourceRegistry _registry;
     private readonly RtmpPullProxyManager _proxies;
     private readonly ILogger _logger;
-    private readonly Dictionary<StreamKey, string> _targets;
+    private readonly ConcurrentDictionary<StreamKey, string> _targets;
     private readonly ConcurrentDictionary<StreamKey, DateTimeOffset> _started = new();
     private readonly object _gate = new();
     private readonly TimeSpan _idleDelay;
@@ -49,14 +49,14 @@ internal sealed class OnDemandProxyService : BackgroundService, IOnDemandProxy
         _idleDelay = TimeSpan.FromMilliseconds(Math.Max(1_000, options.OnDemandIdleMS));
         _maxWait = TimeSpan.FromMilliseconds(Math.Max(1_000, options.OnDemandMaxWaitMS));
 
-        _targets = new Dictionary<StreamKey, string>();
+        _targets = new ConcurrentDictionary<StreamKey, string>();
         foreach (var (key, url) in RtmpPullProxyManager.ParseList(options.OnDemandList))
         {
             _targets[key] = url;
         }
     }
 
-    /// <summary>配置了几路按需拉流（0 表示未启用）。</summary>
+    /// <summary>登记了几路按需拉流（0 表示还没登记，API 可随时添加）。</summary>
     public int Count => _targets.Count;
 
     /// <summary>当前正在拉的按需流数量。</summary>
@@ -66,6 +66,65 @@ internal sealed class OnDemandProxyService : BackgroundService, IOnDemandProxy
 
     /// <summary>按需拉流的待触发列表（只读，便于诊断/测试）。</summary>
     public IReadOnlyDictionary<StreamKey, string> Targets => _targets;
+
+    public IReadOnlyList<OnDemandProxyTarget> List() =>
+        _targets
+            .Select(pair => new OnDemandProxyTarget(pair.Key, pair.Value, _proxies.IsPulling(pair.Key)))
+            .OrderBy(item => item.Key.ToString(), StringComparer.Ordinal)
+            .ToArray();
+
+    public bool Register(StreamKey key, string url)
+    {
+        if (string.IsNullOrWhiteSpace(key.App))
+        {
+            throw new ArgumentException("app 不能为空", nameof(key));
+        }
+
+        if (string.IsNullOrWhiteSpace(key.Stream))
+        {
+            throw new ArgumentException("stream 不能为空", nameof(key));
+        }
+
+        if (!RtmpPullProxyManager.IsSupportedUrl(url))
+        {
+            throw new ArgumentException($"url 必须是 rtmp:// 或 rtsp:// 地址：{url}", nameof(url));
+        }
+
+        if (_targets.TryGetValue(key, out var existing) &&
+            string.Equals(existing, url, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _targets[key] = url;
+
+        // 地址被改写：先停掉在拉的那一路，等下一次点播用新地址重拉
+        if (_proxies.IsPulling(key))
+        {
+            _proxies.Stop(key);
+            _started.TryRemove(key, out _);
+        }
+
+        _logger.LogInformation("按需拉流已登记 {Key} ← {Url}（有观众点播时才拉）", key, url);
+        return true;
+    }
+
+    public bool Unregister(StreamKey key)
+    {
+        if (!_targets.TryRemove(key, out _))
+        {
+            return false;
+        }
+
+        if (_proxies.IsPulling(key))
+        {
+            _proxies.Stop(key);
+        }
+
+        _started.TryRemove(key, out _);
+        _logger.LogInformation("按需拉流已移除 {Key}", key);
+        return true;
+    }
 
     public bool EnsureStarted(StreamKey key)
     {
@@ -100,14 +159,9 @@ internal sealed class OnDemandProxyService : BackgroundService, IOnDemandProxy
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (_targets.Count == 0)
-        {
-            _logger.LogInformation("按需拉流未启用（proxy.on_demand_list 为空）");
-            return;
-        }
-
         _logger.LogInformation(
-            "按需拉流已就绪：{Count} 路（无人观看 {Idle}ms 后停止，启动后 {MaxWait}ms 仍无观众也停止）",
+            "按需拉流已就绪：预置 {Count} 路（无人观看 {Idle}ms 后停止，启动后 {MaxWait}ms 仍无观众也停止；" +
+            "可用 addStreamProxy?on_demand=1 动态登记）",
             _targets.Count,
             _idleDelay.TotalMilliseconds,
             _maxWait.TotalMilliseconds);

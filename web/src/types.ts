@@ -80,6 +80,8 @@ export interface ProxyState {
   elapsedMs: number
   /** 没人看也不回收（常驻） */
   keepOnNoneReader: boolean
+  /** 按需拉流：只在有人点播时才拉；还没被触发时 online=false、startedAt=0 */
+  onDemand?: boolean
 }
 
 export interface AnalyzerInfo {

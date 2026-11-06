@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using ZlmSharp.Configuration;
 using ZlmSharp.Core;
@@ -226,6 +228,111 @@ public class OnDemandProxyTests
         Assert.True(
             await WaitAsync(() => Task.FromResult(!manager.IsPulling(pullKey)), TimeSpan.FromSeconds(15), cts.Token),
             "观众走光后应停止重连");
+    }
+
+    [Fact]
+    public async Task Api_RegistersOnDemandProxy_TriggersOnPlay_AndCanBeDeleted()
+    {
+        var rtmpPort = TestHost.GetFreePort();
+        var pullKey = StreamKey.Create(null, "live", "cam-api");
+        var sourceKey = StreamKey.Create(null, "live", "cam-src");
+        var origin = $"rtmp://127.0.0.1:{rtmpPort}/live/cam-src";
+
+        await using var host = await TestHost.StartAsync(rtmpPort, options =>
+        {
+            options.General.MaxStreamWaitMS = 15000;
+            options.General.WaitTrackReadyMS = 15000;
+            options.Proxy.RetryDelayMS = 200;
+        });
+
+        using var cts = new CancellationTokenSource(Timeout);
+        using var client = new HttpClient();
+        var registry = host.Services.GetRequiredService<MediaSourceRegistry>();
+        var manager = host.Services.GetRequiredService<RtmpPullProxyManager>();
+
+        var addUrl = $"{host.Address}/index/api/addStreamProxy?app=live&stream=cam-api&on_demand=1" +
+                     $"&url={Uri.EscapeDataString(origin)}";
+
+        // 1) 编程登记：只登记，不立刻拉流
+        using (var add = JsonDocument.Parse(await client.GetStringAsync(addUrl, cts.Token)))
+        {
+            Assert.Equal(0, add.RootElement.GetProperty("code").GetInt32());
+            Assert.Equal(pullKey.ToString(), add.RootElement.GetProperty("data").GetProperty("key").GetString());
+        }
+
+        Assert.False(manager.IsPulling(pullKey), "登记后不应立即拉流");
+        Assert.False(registry.TryGet(pullKey, out _), "登记后本地不应有这路流");
+
+        // 2) getProxyList 里能看到"按需待触发"
+        var items = await GetProxyListAsync(client, host.Address, cts.Token);
+        var item = Assert.Single(items);
+        Assert.True(item.GetProperty("onDemand").GetBoolean());
+        Assert.False(item.GetProperty("online").GetBoolean());
+        Assert.Equal(origin, item.GetProperty("url").GetString());
+
+        // 3) 非法地址拒绝
+        using (var bad = JsonDocument.Parse(await client.GetStringAsync(
+            $"{host.Address}/index/api/addStreamProxy?app=live&stream=bad&on_demand=1&url=http%3A%2F%2Fexample.com",
+            cts.Token)))
+        {
+            Assert.Equal(-1, bad.RootElement.GetProperty("code").GetInt32());
+        }
+
+        // 4) 源站上线 + 播放端点播 → 触发拉流
+        var publisher = await RtmpPublishClient.ConnectAsync("127.0.0.1", rtmpPort, "live", "cam-src", cts.Token);
+        try
+        {
+            await publisher.SendAvcConfigAsync(TestData.Sps720, TestData.Pps, cancellationToken: cts.Token);
+            await publisher.SendVideoAsync(
+                TestData.AnnexBKeyFrame(), keyFrame: true, timestamp: 0, cancellationToken: cts.Token);
+
+            await WaitAsync(
+                () => Task.FromResult(registry.TryGet(sourceKey, out var src) && src is { Video.Width: > 0 }),
+                TimeSpan.FromSeconds(15),
+                cts.Token);
+
+            var player = await RtmpPlayClient.ConnectAsync("127.0.0.1", rtmpPort, "live", cts.Token);
+            try
+            {
+                await player.PlayAsync("cam-api", cts.Token);
+                var code = string.Empty;
+                while (code != "NetStream.Play.Start")
+                {
+                    (code, _) = await player.ReadNextStatusAsync(cts.Token);
+                }
+
+                Assert.True(manager.IsPulling(pullKey), "点播后应按登记信息拉起拉流");
+            }
+            finally
+            {
+                await player.DisposeAsync();
+            }
+        }
+        finally
+        {
+            await publisher.DisposeAsync();
+        }
+
+        // 5) delStreamProxy 同时清掉按需登记
+        using (var del = JsonDocument.Parse(await client.GetStringAsync(
+            $"{host.Address}/index/api/delStreamProxy?key={Uri.EscapeDataString(pullKey.ToString())}", cts.Token)))
+        {
+            Assert.True(del.RootElement.GetProperty("data").GetProperty("flag").GetBoolean());
+        }
+
+        Assert.False(manager.IsPulling(pullKey));
+        Assert.Empty(await GetProxyListAsync(client, host.Address, cts.Token));
+    }
+
+    private static async Task<JsonElement[]> GetProxyListAsync(HttpClient client, string address, CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(
+            await client.GetStringAsync($"{address}/index/api/getProxyList", cancellationToken));
+        return document.RootElement
+            .GetProperty("data")
+            .EnumerateArray()
+            .Select(item => item.Clone())
+            .ToArray();
     }
 
     private static async Task<bool> WaitAsync(Func<Task<bool>> condition, TimeSpan timeout, CancellationToken cancellationToken)

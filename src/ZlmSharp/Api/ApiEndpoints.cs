@@ -74,6 +74,7 @@ public static class ApiEndpoints
         var recordFiles = endpoints.ServiceProvider.GetService<RecordFileService>();
         var pushes = endpoints.ServiceProvider.GetService<RtmpPushManager>();
         var proxies = endpoints.ServiceProvider.GetService<RtmpPullProxyManager>();
+        var onDemandProxy = endpoints.ServiceProvider.GetService<IOnDemandProxy>();
 
         endpoints.MapGet("/index/api/version", (RequestDelegate)(context => VersionAsync(context, options, version)));
         endpoints.MapGet("/index/api/getApiList", (RequestDelegate)(context => ApiListAsync(context, options)));
@@ -105,13 +106,20 @@ public static class ApiEndpoints
         endpoints.MapGet("/index/api/startPush", (RequestDelegate)(context => StartPushAsync(context, options, pushes)));
         endpoints.MapGet("/index/api/stopPush", (RequestDelegate)(context => StopPushAsync(context, options, pushes)));
         endpoints.MapGet("/index/api/getPushList", (RequestDelegate)(context => GetPushListAsync(context, options, pushes)));
-        endpoints.MapGet("/index/api/addStreamProxy", (RequestDelegate)(context => AddStreamProxyAsync(context, options, proxies)));
-        endpoints.MapGet("/index/api/delStreamProxy", (RequestDelegate)(context => DelStreamProxyAsync(context, options, proxies)));
-        endpoints.MapGet("/index/api/getProxyList", (RequestDelegate)(context => GetProxyListAsync(context, options, proxies, registry)));
+        endpoints.MapGet("/index/api/addStreamProxy", (RequestDelegate)(context => AddStreamProxyAsync(context, options, proxies, onDemandProxy)));
+        endpoints.MapGet("/index/api/delStreamProxy", (RequestDelegate)(context => DelStreamProxyAsync(context, options, proxies, onDemandProxy)));
+        endpoints.MapGet("/index/api/getProxyList", (RequestDelegate)(context => GetProxyListAsync(context, options, proxies, registry, onDemandProxy)));
     }
 
-    /// <summary>拉流代理：把远端 rtmp 拉到本地 <c>vhost/app/stream</c>（也可用返回的 key 停止）。</summary>
-    private static async Task AddStreamProxyAsync(HttpContext context, AppOptions options, RtmpPullProxyManager? proxies)
+    /// <summary>
+    /// 拉流代理：把远端 rtmp/rtsp 拉到本地 <c>vhost/app/stream</c>（也可用返回的 key 停止）。
+    /// 带 <c>on_demand=1</c> 时只登记为按需拉流，不立刻拉，等播放端点播再拉（<c>delStreamProxy</c> 可删）。
+    /// </summary>
+    private static async Task AddStreamProxyAsync(
+        HttpContext context,
+        AppOptions options,
+        RtmpPullProxyManager? proxies,
+        IOnDemandProxy? onDemandProxy)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -130,6 +138,32 @@ public static class ApiEndpoints
         {
             var query = context.Request.Query;
 
+            // on_demand=1：只登记，不拉流（运行期动态添加按需源）
+            if (ParseFlag(query["on_demand"].ToString()) || ParseFlag(query["demand"].ToString()))
+            {
+                if (onDemandProxy is null)
+                {
+                    await WriteJsonAsync(
+                        context,
+                        new ApiErrorResponse(-1, "按需拉流未启用"),
+                        ApiJsonContext.Default.ApiErrorResponse);
+                    return;
+                }
+
+                var onDemandKey = StreamKey.Create(
+                    query["vhost"].ToString(),
+                    query["app"].ToString(),
+                    query["stream"].ToString());
+
+                onDemandProxy.Register(onDemandKey, query["url"].ToString());
+
+                await WriteJsonAsync(
+                    context,
+                    new ApiProxyKeyResponse(0, new ApiProxyKeyData(onDemandKey.ToString())),
+                    ApiJsonContext.Default.ApiProxyKeyResponse);
+                return;
+            }
+
             // 默认普通代理（没人看按 auto_close 回收）；显式 keep=1 才是常驻
             var keep = ParseFlag(query["keep"].ToString()) || ParseFlag(query["keep_on_none_reader"].ToString());
             var key = proxies.Start(
@@ -144,13 +178,17 @@ public static class ApiEndpoints
                 new ApiProxyKeyResponse(0, new ApiProxyKeyData(key.ToString())),
                 ApiJsonContext.Default.ApiProxyKeyResponse);
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
             await WriteJsonAsync(context, new ApiErrorResponse(-1, exception.Message), ApiJsonContext.Default.ApiErrorResponse);
         }
     }
 
-    private static async Task DelStreamProxyAsync(HttpContext context, AppOptions options, RtmpPullProxyManager? proxies)
+    private static async Task DelStreamProxyAsync(
+        HttpContext context,
+        AppOptions options,
+        RtmpPullProxyManager? proxies,
+        IOnDemandProxy? onDemandProxy)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -198,16 +236,25 @@ public static class ApiEndpoints
             key = StreamKey.Create(context.Request.Query["vhost"].ToString(), app, stream);
         }
 
-        var flag = proxies.Stop(key);
-        await WriteJsonAsync(context, new ApiProxyFlagResponse(0, new ApiProxyFlagData(flag)), ApiJsonContext.Default.ApiProxyFlagResponse);
+        // 正在拉的代理停掉；同时清掉按需登记（两者都可能存在，任一成功即算删除成功）
+        var stopped = proxies.Stop(key);
+        var unregistered = onDemandProxy?.Unregister(key) == true;
+        await WriteJsonAsync(
+            context,
+            new ApiProxyFlagResponse(0, new ApiProxyFlagData(stopped || unregistered)),
+            ApiJsonContext.Default.ApiProxyFlagResponse);
     }
 
-    /// <summary>拉流代理列表（含源地址与在线状态），刷新页面后仍可恢复。</summary>
+    /// <summary>
+    /// 拉流代理列表（含源地址与在线状态），刷新页面后仍可恢复。
+    /// 按需登记但还没人点播的流也在列表里（<c>onDemand=true</c>, <c>online=false</c>）。
+    /// </summary>
     private static async Task GetProxyListAsync(
         HttpContext context,
         AppOptions options,
         RtmpPullProxyManager? proxies,
-        MediaSourceRegistry? registry)
+        MediaSourceRegistry? registry,
+        IOnDemandProxy? onDemandProxy)
     {
         if (!await AuthorizeAsync(context, options))
         {
@@ -217,21 +264,39 @@ public static class ApiEndpoints
         LogRequest(context, options, "getProxyList");
 
         var query = context.Request.Query;
-        ApiProxyData[] data = proxies is null
-            ? []
-            : proxies.List()
-                .Where(item =>
-                    (query["vhost"].Count == 0 || string.Equals(item.Key.Vhost, query["vhost"].ToString(), StringComparison.OrdinalIgnoreCase)) &&
-                    (query["app"].Count == 0 || string.Equals(item.Key.App, query["app"].ToString(), StringComparison.OrdinalIgnoreCase)) &&
-                    (query["stream"].Count == 0 || string.Equals(item.Key.Stream, query["stream"].ToString(), StringComparison.OrdinalIgnoreCase)))
-                .Select(item => ToApiProxy(item, registry))
-                .OrderBy(item => item.Key)
-                .ToArray();
+        bool Matches(string vhost, string app, string stream) =>
+            (query["vhost"].Count == 0 || string.Equals(vhost, query["vhost"].ToString(), StringComparison.OrdinalIgnoreCase)) &&
+            (query["app"].Count == 0 || string.Equals(app, query["app"].ToString(), StringComparison.OrdinalIgnoreCase)) &&
+            (query["stream"].Count == 0 || string.Equals(stream, query["stream"].ToString(), StringComparison.OrdinalIgnoreCase));
+
+        var onDemand = onDemandProxy?.List() ?? [];
+        var onDemandKeys = onDemand.Select(item => item.Key).ToHashSet();
+
+        var pulling = (proxies?.List() ?? [])
+            .Where(item => Matches(item.Key.Vhost, item.Key.App, item.Key.Stream))
+            .Select(item => ToApiProxy(item, registry, onDemandKeys.Contains(item.Key)));
+
+        // 只登记、还没被点播触发的按需项：也列出来，方便确认登记成功
+        var idle = onDemand
+            .Where(item => !item.Pulling && Matches(item.Key.Vhost, item.Key.App, item.Key.Stream))
+            .Select(item => new ApiProxyData(
+                item.Key.ToString(),
+                item.Key.Vhost,
+                item.Key.App,
+                item.Key.Stream,
+                item.Url,
+                Online: false,
+                StartedAt: 0,
+                ElapsedMs: 0,
+                KeepOnNoneReader: false,
+                OnDemand: true));
+
+        var data = pulling.Concat(idle).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
 
         await WriteJsonAsync(context, new ApiProxyListResponse(0, data), ApiJsonContext.Default.ApiProxyListResponse);
     }
 
-    private static ApiProxyData ToApiProxy(RtmpProxyInfo info, MediaSourceRegistry? registry) => new(
+    private static ApiProxyData ToApiProxy(RtmpProxyInfo info, MediaSourceRegistry? registry, bool onDemand = false) => new(
         info.Key.ToString(),
         info.Key.Vhost,
         info.Key.App,
@@ -241,7 +306,8 @@ public static class ApiEndpoints
         registry?.Find(info.Key.Vhost, info.Key.App, info.Key.Stream) is { IsClosed: false } source && source.Video.Ready,
         info.StartedAt.ToUnixTimeSeconds(),
         (long)Math.Max(0, (DateTimeOffset.UtcNow - info.StartedAt).TotalMilliseconds),
-        info.KeepOnNoneReader);
+        info.KeepOnNoneReader,
+        onDemand);
 
     /// <summary>查询定时检测结果（每路流只保留最近一次）。</summary>
     private static async Task YoloResultAsync(HttpContext context, AppOptions options, AnalysisResultStore? store)

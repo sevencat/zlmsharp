@@ -98,6 +98,9 @@ public sealed class RtmpPullProxyManager : IAsyncDisposable
         return result;
     }
 
+    /// <summary>url 是否是支持的拉流地址（<c>rtmp://</c> 或 <c>rtsp://</c>）。</summary>
+    public static bool IsSupportedUrl(string url) => TryResolve(url, out _, out _);
+
     /// <summary>开始（或重启）一路拉流代理，返回本地流标识。</summary>
     /// <param name="keepOnNoneReader">
     /// true = 用户指定的常驻代理：没人看也不回收，一直拉、拉不到就重试，直到 <c>delStreamProxy</c>；

@@ -9,7 +9,7 @@ const pushes = ref<PushState[]>([])
 const busy = ref('')
 const pushError = ref('')
 
-const proxyForm = reactive({ app: 'live', stream: '', url: '', keep: false })
+const proxyForm = reactive({ app: 'live', stream: '', url: '', keep: false, onDemand: false })
 const pushForm = reactive({ app: 'live', stream: '', url: '' })
 
 async function loadProxies() {
@@ -28,11 +28,12 @@ async function addProxy() {
       app: proxyForm.app,
       stream: proxyForm.stream,
       url: proxyForm.url,
-      keep: proxyForm.keep ? 1 : undefined,
+      keep: !proxyForm.onDemand && proxyForm.keep ? 1 : undefined,
+      on_demand: proxyForm.onDemand ? 1 : undefined,
     })
     proxyForm.stream = ''
     proxyForm.url = ''
-    toast('success', '拉流代理已添加')
+    toast('success', proxyForm.onDemand ? '已登记按需拉流（有人点播时才拉）' : '拉流代理已添加')
     await loadProxies()
   } catch (error) {
     toastError(error, '添加代理')
@@ -117,7 +118,8 @@ onMounted(() => {
           placeholder="rtsp://user:pass@host/stream 或 rtmp://..."
           @keyup.enter="addProxy"
         />
-        <b-checkbox v-model="proxyForm.keep" size="is-small">没人看也不回收</b-checkbox>
+        <b-checkbox v-model="proxyForm.onDemand" size="is-small">按需（有人看才拉）</b-checkbox>
+        <b-checkbox v-if="!proxyForm.onDemand" v-model="proxyForm.keep" size="is-small">没人看也不回收</b-checkbox>
         <b-button size="is-small" type="is-primary" icon-left="plus" :loading="busy === 'addProxy'" @click="addProxy">
           添加
         </b-button>
@@ -132,12 +134,14 @@ onMounted(() => {
               <td class="mono">{{ item.app }}/{{ item.stream }}</td>
               <td class="mono">{{ item.url }}</td>
               <td>
-                <b-tag size="is-small" :type="item.online ? 'is-success is-light' : 'is-warning is-light'">
+                <b-tag v-if="item.onDemand && !item.online" size="is-small" type="is-light">按需待触发</b-tag>
+                <b-tag v-else size="is-small" :type="item.online ? 'is-success is-light' : 'is-warning is-light'">
                   {{ item.online ? '在线' : '连接中/重试' }}
                 </b-tag>
                 <b-tag v-if="item.keepOnNoneReader" size="is-small" type="is-info is-light">常驻</b-tag>
+                <b-tag v-if="item.onDemand" size="is-small" type="is-link is-light">按需</b-tag>
               </td>
-              <td>{{ Math.round(item.elapsedMs / 1000) }}s</td>
+              <td>{{ item.startedAt > 0 ? `${Math.round(item.elapsedMs / 1000)}s` : '-' }}</td>
               <td class="actions">
                 <b-button size="is-small" type="is-danger is-light" :loading="busy === item.key" @click="removeProxy(item.key)">
                   删除

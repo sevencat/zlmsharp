@@ -88,7 +88,7 @@ All responses follow ZLM's `{"code":0,"msg":"success","data":...}` envelope. `GE
 | `getMp4RecordFile`, `deleteRecordFile` | Browse / delete recorded files (`app`+`stream`+`period`+`path`), path-escape safe |
 | `GET /record/{relative path}` | Play / download a recorded file (Range supported); path is relative to the record root, no secret required |
 | `startPush`, `stopPush`, `getPushList` | RTMP relay push |
-| `addStreamProxy`, `delStreamProxy`, `getProxyList` | Pull proxy (RTMP/RTSP source → local stream), list includes source URL, online state and `keepOnNoneReader`; by default an idle proxy is reclaimed like any other stream, pass `keep=1` to keep pulling forever until `delStreamProxy` (`[proxy] keep_on_none_reader` sets the default for the startup list) |
+| `addStreamProxy`, `delStreamProxy`, `getProxyList` | Pull proxy (RTMP/RTSP source → local stream), list includes source URL, online state, `keepOnNoneReader` and `onDemand`; by default an idle proxy is reclaimed like any other stream, pass `keep=1` to keep pulling forever until `delStreamProxy` (`[proxy] keep_on_none_reader` sets the default for the startup list); `on_demand=1` only registers an on-demand source (pulled when someone plays it) |
 | `yoloInfo`, `yoloDetect`, `getYoloResult` | YOLO model info, one-shot detection, latest periodic result (compat endpoints backed by the analyzer layer) |
 | `getAnalyzerList`, `analyzeDetect`, `analyzeResult` | Analyzer catalog, one-shot analysis for any analyzer (`analyzer=`), latest periodic results |
 | `startOverlay`, `stopOverlay`, `getOverlay` | Generic overlay: draw any analyzer's results onto a derived `{stream}_ai` output stream |
@@ -131,6 +131,23 @@ on_demand_max_wait_ms=30000  # give up if nobody ever watches (source down / pla
 - Triggers from HTTP-FLV, WS-FLV, RTMP `play` and RTSP `DESCRIBE`/`PLAY`.
 - On-demand streams are not reclaimed by `auto_close` / `on_stream_none_reader`; the viewer count decides.
 - AI sampling skips them (its decoder counts as a viewer and would keep the proxy alive); use `list` if you need analysis.
+
+Sources can also be registered at runtime:
+
+```bash
+# register only (on_demand=1), nothing is pulled yet
+curl "http://127.0.0.1:8080/index/api/addStreamProxy?app=live&stream=cam3&on_demand=1&url=rtsp%3A%2F%2F192.168.1.11%3A554%2Fstream1"
+# listing shows pending entries with onDemand=true, online=false
+curl "http://127.0.0.1:8080/index/api/getProxyList"
+# remove the registration (same endpoint as a normal proxy)
+curl "http://127.0.0.1:8080/index/api/delStreamProxy?key=__defaultVhost__%2Flive%2Fcam3"
+```
+
+```csharp
+// embedded: inject IOnDemandProxy and manage entries in code
+onDemandProxy.Register(StreamKey.Create(null, "live", "cam3"), "rtsp://192.168.1.11:554/stream1");
+onDemandProxy.Unregister(StreamKey.Create(null, "live", "cam3"));
+```
 
 ## Recording
 

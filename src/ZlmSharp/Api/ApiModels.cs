@@ -209,6 +209,7 @@ public sealed record ApiProxyData(
     bool Online,
     long StartedAt,
     long ElapsedMs,
-    bool KeepOnNoneReader = false);
+    bool KeepOnNoneReader = false,
+    bool OnDemand = false);
 
 public sealed record ApiProxyListResponse(int Code, IReadOnlyList<ApiProxyData> Data);

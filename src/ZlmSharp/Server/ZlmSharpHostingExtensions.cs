@@ -123,19 +123,17 @@ public static class ZlmSharpHostingExtensions
                     provider.GetRequiredService<ILoggerFactory>()));
         }
 
-        // 按需拉流：配了 on_demand_list 才启用（播放端触发 + 无人观看后自动停止）
-        if (!string.IsNullOrWhiteSpace(runtime.Options.Proxy.OnDemandList))
-        {
-            services.AddSingleton(provider => new OnDemandProxyService(
-                runtime.Options.Proxy,
-                provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
-                provider.GetRequiredService<ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager>(),
-                provider.GetRequiredService<ILoggerFactory>()));
-            services.AddSingleton<ZlmSharp.Core.IOnDemandProxy>(provider =>
-                provider.GetRequiredService<OnDemandProxyService>());
-            services.AddSingleton<IHostedService>(provider =>
-                provider.GetRequiredService<OnDemandProxyService>());
-        }
+        // 按需拉流：<c>[proxy] on_demand_list</c> 预置，或运行期 addStreamProxy?on_demand=1 动态登记；
+        // 两种都要，所以无条件注册（列表为空时只空转 1s tick）。
+        services.AddSingleton(provider => new OnDemandProxyService(
+            runtime.Options.Proxy,
+            provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
+            provider.GetRequiredService<ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager>(),
+            provider.GetRequiredService<ILoggerFactory>()));
+        services.AddSingleton<ZlmSharp.Core.IOnDemandProxy>(provider =>
+            provider.GetRequiredService<OnDemandProxyService>());
+        services.AddSingleton<IHostedService>(provider =>
+            provider.GetRequiredService<OnDemandProxyService>());
 
         if (runtime.Options.General.StreamNoneReaderDelayMS > 0)
         {

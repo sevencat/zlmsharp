@@ -88,7 +88,7 @@ builder.Services.AddSingleton<IAdminPageAuthorizer, MyAdminPageAuthorizer>();
 | `getMp4RecordFile`、`deleteRecordFile` | 浏览/删除录像文件（`app`+`stream`+`period`+`path`），越界路径拒绝 |
 | `GET /record/{相对路径}` | 直接播放/下载录像文件（支持 Range），路径相对录像根目录，无需 secret |
 | `startPush`、`stopPush`、`getPushList` | RTMP 转推 |
-| `addStreamProxy`、`delStreamProxy`、`getProxyList` | 拉流代理（RTMP/RTSP 源 → 本地流），列表含源地址、在线状态与 `keepOnNoneReader`；普通代理没人看时照常回收，`keep=1` 则一直拉、直到 `delStreamProxy`（`[proxy] keep_on_none_reader` 设启动列表的默认值） |
+| `addStreamProxy`、`delStreamProxy`、`getProxyList` | 拉流代理（RTMP/RTSP 源 → 本地流），列表含源地址、在线状态、`keepOnNoneReader` 与 `onDemand`；普通代理没人看时照常回收，`keep=1` 则一直拉、直到 `delStreamProxy`（`[proxy] keep_on_none_reader` 设启动列表的默认值）；`on_demand=1` 只登记为按需拉流（有人点播才拉，见「按需拉流」） |
 | `yoloInfo`、`yoloDetect`、`getYoloResult` | 模型信息、单次检测、定时检测的最近结果 |
 | `startYoloOverlay`、`stopYoloOverlay`、`getYoloOverlay` | 把检测框画进派生流 `{stream}_yolo` |
 
@@ -127,6 +127,23 @@ on_demand_max_wait_ms=30000  # 启动后一直没人看（源不可用/观众已
 
 - 按需流不参与 `auto_close` / `on_stream_none_reader` 回收，生命周期只由「有没有观众」决定，避免刚拉起就被摘流。
 - 按需流默认不做 AI 定时分析：分析抽帧本身就是一个观看者，会让按需流永远停不下来；需要分析的流请改用常驻代理 `list`。
+
+除了配置文件，也可以在运行期用 API 或代码登记：
+
+```bash
+# 登记一路按需拉流（on_demand=1：只登记，不立即拉）
+curl "http://127.0.0.1:8080/index/api/addStreamProxy?app=live&stream=cam3&on_demand=1&url=rtsp%3A%2F%2F192.168.1.11%3A554%2Fstream1"
+# 查看：按需未触发的项 onDemand=true、online=false
+curl "http://127.0.0.1:8080/index/api/getProxyList"
+# 删除登记（和删除普通代理同一个接口）
+curl "http://127.0.0.1:8080/index/api/delStreamProxy?key=__defaultVhost__%2Flive%2Fcam3"
+```
+
+```csharp
+// 嵌入式场景：注入 IOnDemandProxy 动态增删
+onDemandProxy.Register(StreamKey.Create(null, "live", "cam3"), "rtsp://192.168.1.11:554/stream1");
+onDemandProxy.Unregister(StreamKey.Create(null, "live", "cam3"));
+```
 
 ## 录制
 
