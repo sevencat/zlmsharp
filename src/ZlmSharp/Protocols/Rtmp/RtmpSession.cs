@@ -52,6 +52,7 @@ public sealed class RtmpSession
     private readonly RtmpLogHandler? _log;
     private readonly MediaHookHandler? _hook;
     private readonly MediaSessionRegistry? _sessions;
+    private readonly IOnDemandProxy? _onDemand;
     private readonly string? _remoteIp;
     private readonly int _remotePort;
     private readonly string? _userAgent;
@@ -92,7 +93,8 @@ public sealed class RtmpSession
         MediaSessionRegistry? sessions = null,
         string? remoteIp = null,
         int remotePort = 0,
-        string? userAgent = null)
+        string? userAgent = null,
+        IOnDemandProxy? onDemand = null)
     {
         _stream = stream;
         _registry = registry;
@@ -100,6 +102,7 @@ public sealed class RtmpSession
         _log = log;
         _hook = hook;
         _sessions = sessions;
+        _onDemand = onDemand;
         _remoteIp = remoteIp;
         _remotePort = remotePort;
         _userAgent = userAgent;
@@ -588,6 +591,13 @@ public sealed class RtmpSession
 
         _playSession = session;
         var stream = key.Stream;
+
+        // 按需拉流：目标流不在线但配置了源地址时先触发，再按 MaxStreamWaitMS 等它上线。
+        // 鉴权放在触发之前，避免未通过的播放请求把外部源拉起来。
+        if (_onDemand?.EnsureStarted(key) == true)
+        {
+            Log(RtmpLogLevel.Info, $"按需拉流已触发 {key}（RTMP 播放请求）");
+        }
 
         var source = await WaitForSourceAsync(key, _options.MaxStreamWaitMS, cancellationToken).ConfigureAwait(false);
         if (source is null)

@@ -97,8 +97,13 @@ public static class ConfigBinder
         proxy.RetryDelayMS = document.GetInt("proxy", "retry_delay_ms", proxy.RetryDelayMS);
         proxy.List = document.GetString("proxy", "list", proxy.List);
         proxy.KeepOnNoneReader = document.GetBool("proxy", "keep_on_none_reader", proxy.KeepOnNoneReader);
+        proxy.OnDemandList = document.GetString("proxy", "on_demand_list", proxy.OnDemandList);
+        proxy.OnDemandIdleMS = document.GetInt("proxy", "on_demand_idle_ms", proxy.OnDemandIdleMS);
+        proxy.OnDemandMaxWaitMS = document.GetInt("proxy", "on_demand_max_wait_ms", proxy.OnDemandMaxWaitMS);
         proxy.MaxConcurrency = Math.Clamp(proxy.MaxConcurrency, 1, 256);
         proxy.RetryDelayMS = Math.Clamp(proxy.RetryDelayMS, 200, 60_000);
+        proxy.OnDemandIdleMS = Math.Clamp(proxy.OnDemandIdleMS, 1_000, 3_600_000);
+        proxy.OnDemandMaxWaitMS = Math.Clamp(proxy.OnDemandMaxWaitMS, 1_000, 3_600_000);
 
         var hls = options.Hls;
         hls.SegDuration = document.GetInt("hls", "seg_duration", hls.SegDuration);

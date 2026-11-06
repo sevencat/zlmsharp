@@ -15,13 +15,15 @@ internal sealed class RtmpListenerService : TcpListenerHostedService
     private readonly ILogger _sessionLogger;
     private readonly MediaSessionRegistry? _sessions;
     private readonly MediaHookHandler? _hook;
+    private readonly IOnDemandProxy? _onDemand;
 
     public RtmpListenerService(
         AppOptions options,
         MediaSourceRegistry registry,
         ILoggerFactory loggerFactory,
         MediaSessionRegistry? sessions = null,
-        MediaHookHandler? hook = null)
+        MediaHookHandler? hook = null,
+        IOnDemandProxy? onDemand = null)
         : base(loggerFactory.CreateLogger("ZlmSharp.Rtmp"))
     {
         _options = options.Rtmp;
@@ -29,6 +31,7 @@ internal sealed class RtmpListenerService : TcpListenerHostedService
         _registry = registry;
         _sessions = sessions;
         _hook = hook;
+        _onDemand = onDemand;
         _sessionLogger = loggerFactory.CreateLogger("ZlmSharp.Rtmp.Session");
     }
 
@@ -56,7 +59,8 @@ internal sealed class RtmpListenerService : TcpListenerHostedService
             _hook,
             _sessions,
             remote?.Address.ToString(),
-            remote?.Port ?? 0);
+            remote?.Port ?? 0,
+            onDemand: _onDemand);
 
         await session.RunAsync(stoppingToken).ConfigureAwait(false);
     }

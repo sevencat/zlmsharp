@@ -113,6 +113,21 @@ retry_delay_ms=2000
 list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/live/demo
 ```
 
+### 按需拉流（有人看才拉）
+
+预先写好 `app/stream=url`，宿主启动时不连源站；有播放端（HTTP-FLV / WS-FLV / RTMP play / RTSP DESCRIBE、PLAY）
+点播这些流时才拉起，观众全部离开后自动断开，下次点播再拉。断流期间只要还有观众，就按 `retry_delay_ms` 一直重连。
+
+```ini
+[proxy]
+on_demand_list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/live/demo
+on_demand_idle_ms=10000      # 最后一个观众离开后保持多久再断开（接住刷新页面的抖动）
+on_demand_max_wait_ms=30000  # 启动后一直没人看（源不可用/观众已走）多久就断开
+```
+
+- 按需流不参与 `auto_close` / `on_stream_none_reader` 回收，生命周期只由「有没有观众」决定，避免刚拉起就被摘流。
+- 按需流默认不做 AI 定时分析：分析抽帧本身就是一个观看者，会让按需流永远停不下来；需要分析的流请改用常驻代理 `list`。
+
 ## 录制
 
 - `startRecord?app=&stream=&type=&max_second=` 对在线流开始录制；文件落在 `ZLM_RECORD_ROOT`（回退 `protocol.mp4_save_path`）下的 `app/stream/yyyy-MM-dd/`。

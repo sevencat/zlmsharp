@@ -107,6 +107,11 @@ public static class DefaultConfig
         max_concurrency=16
         retry_delay_ms=2000
         list=
+        # 按需拉流：平时不拉，有人点播时才连源站，观众走光后自动停止（断流时有观众会一直重连）
+        # on_demand_list=app/stream=rtmp://... ; app/stream=rtsp://...
+        on_demand_list=
+        on_demand_idle_ms=10000
+        on_demand_max_wait_ms=30000
 
         [hls]
         # startRecord?type=4 时输出 TS 切片 + hls.m3u8

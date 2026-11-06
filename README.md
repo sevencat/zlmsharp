@@ -115,6 +115,23 @@ retry_delay_ms=2000
 list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/live/demo
 ```
 
+### On-demand pull (only while someone watches)
+
+Declare the sources up front; nothing is pulled until a player asks for the stream. When the last viewer
+leaves the proxy is stopped, and the next play request pulls it again. If the source drops while viewers
+are still connected, the proxy keeps retrying every `retry_delay_ms`.
+
+```ini
+[proxy]
+on_demand_list=live/cam1=rtsp://192.168.1.10:554/stream1; live/cam2=rtmp://example.com/live/demo
+on_demand_idle_ms=10000      # keep pulling this long after the last viewer left (absorbs page refreshes)
+on_demand_max_wait_ms=30000  # give up if nobody ever watches (source down / player already gone)
+```
+
+- Triggers from HTTP-FLV, WS-FLV, RTMP `play` and RTSP `DESCRIBE`/`PLAY`.
+- On-demand streams are not reclaimed by `auto_close` / `on_stream_none_reader`; the viewer count decides.
+- AI sampling skips them (its decoder counts as a viewer and would keep the proxy alive); use `list` if you need analysis.
+
 ## Recording
 
 - `startRecord?app=&stream=&type=&max_second=` starts recording an online stream; files land in `ZLM_RECORD_ROOT` (fallback `protocol.mp4_save_path`) under `app/stream/yyyy-MM-dd/`.

@@ -14,7 +14,8 @@ namespace ZlmSharp.Server.Net;
 /// 是否关闭正在推流/代理的流由配置决定：
 /// 1. 正在录像的流 → 保留（没人看也要把录像写完）；
 /// 2. 叠加输出流 → 永不自动回收（生命周期归 stopOverlay）；
-/// 3. 拉流代理 → 由 <c>keep_on_none_reader</c>（或单路 <c>keep=1</c>）决定，默认随 auto_close 回收后自动重连；
+/// 3. 拉流代理 → 按需代理（<c>[proxy] on_demand_list</c>）由 OnDemandProxyService 按观众数关闭；
+///    普通代理由 <c>keep_on_none_reader</c>（或单路 <c>keep=1</c>）决定，默认随 auto_close 回收后自动重连；
 /// 4. 没有发布者会话的残留流 → 直接回收；
 /// 5. <c>protocol.auto_close=1</c> → 直接回收（并踢掉推流端）；
 /// 6. 配了 <c>hook.on_stream_none_reader</c> → 由外部服务决定（返回 code 0 才关）；
@@ -31,6 +32,7 @@ internal sealed class IdleStreamCleanupService : BackgroundService
     private readonly IOverlayController? _overlays;
     private readonly RecorderManager? _recorder;
     private readonly RtmpPullProxyManager? _proxies;
+    private readonly IOnDemandProxy? _onDemand;
     private readonly ILogger _logger;
 
     public IdleStreamCleanupService(
@@ -41,7 +43,8 @@ internal sealed class IdleStreamCleanupService : BackgroundService
         ILoggerFactory loggerFactory,
         IOverlayController? overlays = null,
         RecorderManager? recorder = null,
-        RtmpPullProxyManager? proxies = null)
+        RtmpPullProxyManager? proxies = null,
+        IOnDemandProxy? onDemand = null)
     {
         _options = options;
         _registry = registry;
@@ -50,6 +53,7 @@ internal sealed class IdleStreamCleanupService : BackgroundService
         _overlays = overlays;
         _recorder = recorder;
         _proxies = proxies;
+        _onDemand = onDemand;
         _logger = loggerFactory.CreateLogger("ZlmSharp.IdleCleanup");
     }
 
@@ -170,9 +174,11 @@ internal sealed class IdleStreamCleanupService : BackgroundService
     /// <summary>
     /// 受管流：叠加输出流永不回收；拉流代理只有显式设置 <c>keep_on_none_reader</c> 时才常驻，
     /// 否则按 <c>auto_close</c> / hook 规则回收（<see cref="RtmpPullProxyManager"/> 会自己重建并重连）。
+    /// 按需拉流（<c>[proxy] on_demand_list</c>）的生命周期归 <c>OnDemandProxyService</c>：
+    /// 它按"有没有观众"决定停止，这里若再按 auto_close 摘流会引发无谓的重连抖动。
     /// </summary>
     private bool IsManagedStream(MediaSource source) =>
         string.Equals(source.OriginType, "proxy", StringComparison.OrdinalIgnoreCase)
-            ? _proxies?.IsKeptOnNoneReader(source.Key) == true
+            ? _onDemand?.IsConfigured(source.Key) == true || _proxies?.IsKeptOnNoneReader(source.Key) == true
             : (_overlays?.IsOverlayStream(source.Key.Stream) ?? false);
 }

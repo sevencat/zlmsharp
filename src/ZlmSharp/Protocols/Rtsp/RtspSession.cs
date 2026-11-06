@@ -62,6 +62,7 @@ public sealed class RtspSession
     private readonly MediaHookHandler? _hook;
     private readonly MediaSessionRegistry? _sessions;
     private readonly string? _userAgent;
+    private readonly IOnDemandProxy? _onDemand;
 
     private MediaSource? _source;
     private StreamKey _key;
@@ -101,7 +102,8 @@ public sealed class RtspSession
         IReadOnlyList<RtspRequest>? pendingRequests = null,
         MediaHookHandler? hook = null,
         MediaSessionRegistry? sessions = null,
-        string? userAgent = null)
+        string? userAgent = null,
+        IOnDemandProxy? onDemand = null)
     {
         _stream = stream;
         _registry = registry;
@@ -113,6 +115,7 @@ public sealed class RtspSession
         _hook = hook;
         _sessions = sessions;
         _userAgent = userAgent;
+        _onDemand = onDemand;
         _rtp = new RtpPacketizer((uint)RandomNumberGenerator.GetInt32(int.MaxValue), _options.RtpPayloadType, _options.Mtu);
         _sessionId = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
     }
@@ -786,6 +789,13 @@ public sealed class RtspSession
         }
 
         var key = StreamKey.Create(vhost, app.Length > 0 ? app : _options.DefaultApp, stream);
+
+        // 按需拉流：DESCRIBE / PLAY 首次找不到流时触发预先配置的拉流，再按 MaxStreamWaitMS 等它上线
+        if (_onDemand?.EnsureStarted(key) == true)
+        {
+            Log(RtspLogLevel.Info, $"按需拉流已触发 {key}（RTSP 播放请求）");
+        }
+
         var source = await WaitForSourceAsync(key, _options.MaxStreamWaitMS, cancellationToken)
             .ConfigureAwait(false);
 

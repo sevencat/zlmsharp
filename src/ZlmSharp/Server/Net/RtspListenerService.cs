@@ -18,13 +18,15 @@ internal sealed class RtspListenerService : TcpListenerHostedService
     private readonly ILogger _sessionLogger;
     private readonly MediaSessionRegistry? _sessions;
     private readonly MediaHookHandler? _hook;
+    private readonly IOnDemandProxy? _onDemand;
 
     public RtspListenerService(
         AppOptions options,
         MediaSourceRegistry registry,
         ILoggerFactory loggerFactory,
         MediaSessionRegistry? sessions = null,
-        MediaHookHandler? hook = null)
+        MediaHookHandler? hook = null,
+        IOnDemandProxy? onDemand = null)
         : base(loggerFactory.CreateLogger("ZlmSharp.Rtsp"))
     {
         _options = options.Rtsp;
@@ -32,6 +34,7 @@ internal sealed class RtspListenerService : TcpListenerHostedService
         _registry = registry;
         _sessions = sessions;
         _hook = hook;
+        _onDemand = onDemand;
         _sessionLogger = loggerFactory.CreateLogger("ZlmSharp.Rtsp.Session");
     }
 
@@ -129,7 +132,8 @@ internal sealed class RtspListenerService : TcpListenerHostedService
             pending,
             _hook,
             _sessions,
-            userAgent);
+            userAgent,
+            _onDemand);
         await session.RunAsync(stoppingToken).ConfigureAwait(false);
     }
 

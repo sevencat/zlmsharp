@@ -123,6 +123,20 @@ public static class ZlmSharpHostingExtensions
                     provider.GetRequiredService<ILoggerFactory>()));
         }
 
+        // 按需拉流：配了 on_demand_list 才启用（播放端触发 + 无人观看后自动停止）
+        if (!string.IsNullOrWhiteSpace(runtime.Options.Proxy.OnDemandList))
+        {
+            services.AddSingleton(provider => new OnDemandProxyService(
+                runtime.Options.Proxy,
+                provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
+                provider.GetRequiredService<ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager>(),
+                provider.GetRequiredService<ILoggerFactory>()));
+            services.AddSingleton<ZlmSharp.Core.IOnDemandProxy>(provider =>
+                provider.GetRequiredService<OnDemandProxyService>());
+            services.AddSingleton<IHostedService>(provider =>
+                provider.GetRequiredService<OnDemandProxyService>());
+        }
+
         if (runtime.Options.General.StreamNoneReaderDelayMS > 0)
         {
             services.AddSingleton<IHostedService>(provider =>
@@ -134,7 +148,8 @@ public static class ZlmSharpHostingExtensions
                     provider.GetRequiredService<ILoggerFactory>(),
                     provider.GetService<ZlmSharp.Ai.IOverlayController>(),
                     provider.GetService<ZlmSharp.Recording.RecorderManager>(),
-                    provider.GetService<ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager>()));
+                    provider.GetService<ZlmSharp.Protocols.Rtmp.RtmpPullProxyManager>(),
+                    provider.GetService<ZlmSharp.Core.IOnDemandProxy>()));
         }
 
         if (settings.RegisterStreamListeners)
@@ -147,7 +162,8 @@ public static class ZlmSharpHostingExtensions
                         provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
                         provider.GetRequiredService<ILoggerFactory>(),
                         provider.GetRequiredService<ZlmSharp.Core.MediaSessionRegistry>(),
-                        provider.GetRequiredService<ZlmSharp.Core.MediaHookHandler>()));
+                        provider.GetRequiredService<ZlmSharp.Core.MediaHookHandler>(),
+                        provider.GetService<ZlmSharp.Core.IOnDemandProxy>()));
             }
 
             if (runtime.Options.Rtmp.Port > 0)
@@ -158,7 +174,8 @@ public static class ZlmSharpHostingExtensions
                         provider.GetRequiredService<ZlmSharp.Core.MediaSourceRegistry>(),
                         provider.GetRequiredService<ILoggerFactory>(),
                         provider.GetRequiredService<ZlmSharp.Core.MediaSessionRegistry>(),
-                        provider.GetRequiredService<ZlmSharp.Core.MediaHookHandler>()));
+                        provider.GetRequiredService<ZlmSharp.Core.MediaHookHandler>(),
+                        provider.GetService<ZlmSharp.Core.IOnDemandProxy>()));
             }
         }
 

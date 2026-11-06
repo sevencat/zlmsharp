@@ -34,8 +34,9 @@ public static class HttpFlvEndpoint
         var options = context.RequestServices.GetRequiredService<AppOptions>();
         var sessions = context.RequestServices.GetService<MediaSessionRegistry>();
         var hook = context.RequestServices.GetService<MediaHookHandler>();
+        var onDemand = context.RequestServices.GetService<IOnDemandProxy>();
         var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ZlmSharp.HttpFlv");
-        return HandleCoreAsync(context, options, registry, sessions, hook, logger);
+        return HandleCoreAsync(context, options, registry, sessions, hook, onDemand, logger);
     }
 
     private static async Task HandleCoreAsync(
@@ -44,6 +45,7 @@ public static class HttpFlvEndpoint
         MediaSourceRegistry registry,
         MediaSessionRegistry? sessions,
         MediaHookHandler? hook,
+        IOnDemandProxy? onDemand,
         ILogger logger)
     {
         if (context.Request.Path.Value is not { } requestPath ||
@@ -97,6 +99,13 @@ public static class HttpFlvEndpoint
                     await context.Response.WriteAsync("forbidden", cancellationToken);
                     return;
                 }
+            }
+
+            // 按需拉流：目标流不在线但配置了源地址时先触发，再按 maxStreamWaitMS 等它上线。
+            // 放在 hook 之后，避免未授权的播放请求把外部源拉起来。
+            if (onDemand?.EnsureStarted(url.Key) == true)
+            {
+                logger.LogInformation("按需拉流已触发 {Key}（FLV 播放请求）", url.Key);
             }
 
             var source = await WaitForSourceAsync(registry, url.Key, options.General.MaxStreamWaitMS, cancellationToken)

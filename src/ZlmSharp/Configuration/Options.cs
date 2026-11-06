@@ -275,6 +275,25 @@ public sealed class ProxyOptions
     /// 该键是 <c>[proxy] list</c> 启动时的默认值，<c>addStreamProxy?keep=1</c> 可按单路指定。
     /// </summary>
     public bool KeepOnNoneReader { get; set; }
+
+    /// <summary>
+    /// 按需拉流列表：<c>app/stream=url</c>（或 <c>vhost/app/stream=url</c>），多项用 <c>;</c> 分隔。
+    /// 与 <see cref="List"/> 不同，这些流平时不拉，只有播放端点播时才真正连接源站；
+    /// 观众全部离开后自动停止，下次点播再拉。非空即启用。
+    /// </summary>
+    public string OnDemandList { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 按需拉流在最后一个观众离开后保持多久（毫秒）再停止拉流，
+    /// 用于接住观众刷新页面/短暂断网的抖动，避免反复连接源站。
+    /// </summary>
+    public int OnDemandIdleMS { get; set; } = 10_000;
+
+    /// <summary>
+    /// 按需拉流启动后最多等多久（毫秒）仍没有任何观众就停止拉流
+    /// （源不可用、或观众等不到流已经走了）。应大于 <c>general.maxStreamWaitMS</c>。
+    /// </summary>
+    public int OnDemandMaxWaitMS { get; set; } = 30_000;
 }
 
 public sealed class LogOptions

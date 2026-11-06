@@ -105,6 +105,10 @@ public static class ConfigSchema
         new("proxy", "max_concurrency", ConfigValueKind.Int, "拉流代理并发上限"),
         new("proxy", "retry_delay_ms", ConfigValueKind.Int, "拉流代理重连间隔(毫秒)"),
         new("proxy", "list", ConfigValueKind.String, "启动即拉的列表 app/stream=url;..."),
+        new("proxy", "keep_on_none_reader", ConfigValueKind.Bool, "启动列表里的代理是否常驻(没人看也不回收)"),
+        new("proxy", "on_demand_list", ConfigValueKind.String, "按需拉流列表 app/stream=url;...（有人看才拉）"),
+        new("proxy", "on_demand_idle_ms", ConfigValueKind.Int, "按需拉流无人观看多久后停止(毫秒)"),
+        new("proxy", "on_demand_max_wait_ms", ConfigValueKind.Int, "按需拉流启动后多久仍无观众就停止(毫秒)"),
 
         new("hls", "seg_duration", ConfigValueKind.Int, "HLS 切片秒数"),
         new("hls", "seg_num", ConfigValueKind.Int, "HLS 播放列表保留片数"),

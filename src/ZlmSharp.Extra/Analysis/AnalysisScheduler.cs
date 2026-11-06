@@ -30,6 +30,7 @@ internal sealed class AnalysisScheduler : BackgroundService
     private readonly OverlayResultCache _overlayResults;
     private readonly FfmpegDecoderPool _decoders;
     private readonly IOverlayController _overlays;
+    private readonly IOnDemandProxy? _onDemand;
     private readonly AppOptions _options;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<(StreamKey Key, string AnalyzerId), DateTime> _lastRun = new();
@@ -45,7 +46,8 @@ internal sealed class AnalysisScheduler : BackgroundService
         FfmpegDecoderPool decoders,
         IOverlayController overlays,
         AppOptions options,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IOnDemandProxy? onDemand = null)
     {
         _analyzers = analyzers;
         _sinks = sinks;
@@ -54,6 +56,7 @@ internal sealed class AnalysisScheduler : BackgroundService
         _overlayResults = overlayResults;
         _decoders = decoders;
         _overlays = overlays;
+        _onDemand = onDemand;
         _options = options;
         _logger = loggerFactory.CreateLogger("ZlmSharp.Analysis");
     }
@@ -108,6 +111,14 @@ internal sealed class AnalysisScheduler : BackgroundService
 
                     // 叠加流是分析的输出，不能再对它做分析（否则会无限套娃）
                     if (_overlays.IsOverlayStream(key.Stream))
+                    {
+                        continue;
+                    }
+
+                    // 按需拉流（[proxy] on_demand_list）：分析抽帧自己就是一个观看者，
+                    // 会让"无人观看"永远不成立、按需流停不下来（没人看时还在持续解码）。
+                    // 需要分析的流请改成常驻代理（[proxy] list）或直接推流。
+                    if (_onDemand?.IsConfigured(key) == true)
                     {
                         continue;
                     }
