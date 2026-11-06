@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using ZlmSharp.Ai;
 using ZlmSharp.Ai.Analysis;
 using ZlmSharp.Configuration;
+using ZlmSharp.Core;
 using ZlmSharp.Extra.Analysis;
 using ZlmSharp.Extra.Capture;
 using ZlmSharp.Extra.Media;
@@ -59,7 +60,15 @@ public static class ExtraServiceCollectionExtensions
         // 按流指定推理模型（startOverlay&model=xxx.onnx）：叠加启动写入，分析采样读取
         services.TryAddSingleton<AnalysisModelSelection>();
 
-        services.TryAddSingleton<YoloOverlayManager>();
+        // 显式带 logger：起停/首帧/结束日志是排查"frames=0"的主要依据
+        services.TryAddSingleton(provider => new YoloOverlayManager(
+            provider.GetRequiredService<MediaSourceRegistry>(),
+            provider.GetRequiredService<AppOptions>(),
+            provider.GetRequiredService<OverlayResultCache>(),
+            provider.GetRequiredService<OverlayComposer>(),
+            provider.GetRequiredService<IMediaToolkit>(),
+            provider.GetService<ILoggerFactory>()?.CreateLogger<YoloOverlayManager>(),
+            provider.GetService<AnalysisModelSelection>()));
         services.TryAddSingleton<AnalysisSinks>();
         services.TryAddSingleton<AnalysisHost>();
         services.TryAddSingleton<IAnalyzerCatalog>(provider => provider.GetRequiredService<AnalysisHost>());

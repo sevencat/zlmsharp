@@ -371,7 +371,8 @@ internal sealed class OverlaySession : IDisposable
             throw;
         }
 
-        _state = OverlayState.Running;
+        // 保持 Starting 直到写出第一帧：ffmpeg 解码/编码进程启动到出帧约需数秒，
+        // 期间 frames 仍为 0，若提前报 Running 会被误读成"已断流"。
         _pump = Task.Run(() => PumpAsync(_cts.Token));
     }
 
@@ -444,7 +445,19 @@ internal sealed class OverlaySession : IDisposable
                 Draw(buffer, stride);
 
                 await sink.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
-                Interlocked.Increment(ref _frames);
+
+                // 首帧真正写出后才算 Running（之前是启动/预热）
+                if (Interlocked.Increment(ref _frames) == 1 && _state == OverlayState.Starting)
+                {
+                    _state = OverlayState.Running;
+                    _logger?.LogInformation(
+                        "结果叠加流出首帧 {Key}（预热 {Elapsed:0.0}s，{Width}x{Height}@{Fps}fps）",
+                        _key,
+                        (DateTimeOffset.UtcNow - _startedAt).TotalSeconds,
+                        _width,
+                        _height,
+                        _fps);
+                }
             }
         }
         catch (OperationCanceledException)

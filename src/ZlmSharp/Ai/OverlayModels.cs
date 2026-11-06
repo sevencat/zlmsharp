@@ -3,9 +3,14 @@ namespace ZlmSharp.Ai;
 /// <summary>一路叠加流的状态。</summary>
 public enum OverlayState
 {
+    /// <summary>进程已拉起、尚未写出第一帧（ffmpeg 解码/编码预热，通常持续数秒，此时 <c>frames=0</c> 属正常）。</summary>
     Starting = 0,
+
+    /// <summary>已产出首帧并持续编码输出。</summary>
     Running = 1,
+
     Stopped = 2,
+
     Failed = 3,
 }
 

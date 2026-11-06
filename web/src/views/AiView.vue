@@ -62,6 +62,15 @@ const startOverlay = () =>
     await loadOverlays()
   })
 
+/** 叠加流状态 → 文案与颜色（starting = ffmpeg 预热中，首帧还没出来，frames 可能为 0） */
+const overlayStateMeta = (state: string) => {
+  if (state === 'running') return { text: '运行中', type: 'is-success is-light' }
+  if (state === 'starting') return { text: '预热中', type: 'is-warning is-light' }
+  if (state === 'failed') return { text: '失败', type: 'is-danger is-light' }
+  if (state === 'stopped') return { text: '已停止', type: 'is-light' }
+  return { text: state, type: 'is-light' }
+}
+
 const stopOverlay = (item: OverlayState) =>
   guard(`stop-${item.overlayStream}`, async () => {
     await call('stopOverlay', { app: item.app, stream: item.stream })
@@ -196,9 +205,14 @@ onMounted(async () => {
             <tr v-for="item in overlays" :key="item.overlayStream">
               <td class="mono">{{ item.app }}/{{ item.stream }}</td>
               <td class="mono">{{ item.overlayStream }}</td>
-              <td><b-tag size="is-small" type="is-success is-light">{{ item.state }}</b-tag></td>
+              <td>
+                <b-tag size="is-small" :type="overlayStateMeta(item.state).type">{{ overlayStateMeta(item.state).text }}</b-tag>
+              </td>
               <td>{{ item.width }}x{{ item.height }}</td>
-              <td>{{ item.frames }}</td>
+              <td>
+                {{ item.frames }}
+                <span v-if="item.state === 'starting'" class="muted">（等待首帧）</span>
+              </td>
               <td class="actions">
                 <b-button
                   size="is-small"
