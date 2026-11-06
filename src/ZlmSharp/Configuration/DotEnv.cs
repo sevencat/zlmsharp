@@ -239,7 +239,32 @@ public static class DefaultEnv
         ZLM_ANALYSIS_SAMPLE_INTERVAL_MS=1000
         # 分析器白名单（逗号分隔，如 yolo,ocr）；留空 = 全部已注册分析器
         ZLM_ANALYSIS_ENABLED=
+        #
+        # OCR（Sdcb.SimdPaddleOCR，纯托管 PP-OCRv6）
+        # 总开关：1 = 启用 OCR 分析；默认 0（CPU 占用明显）
+        ZLM_OCR_ENABLE=0
+        # 内置模型：tiny（默认，随 NuGet 包内置）
+        ZLM_OCR_MODEL=tiny
+        # 自定义模型（可选）：检测/识别/字典三者齐全时优先于内置模型，路径按 exe 目录解析
+        ZLM_OCR_DET_MODEL=
+        ZLM_OCR_REC_MODEL=
+        ZLM_OCR_CLS_MODEL=
+        ZLM_OCR_DICT=
+        # 识别分数下限 0~1 / 是否启用方向分类 / 文本行并行识别线程数
+        ZLM_OCR_MIN_SCORE=0.5
+        ZLM_OCR_USE_CLS=1
+        ZLM_OCR_LINE_WORKERS=1
+        # 同一路流两次 OCR 的最小间隔（毫秒）
+        ZLM_OCR_SAMPLE_INTERVAL_MS=2000
         # 结果叠加流的后缀（{stream}_ai）；改后缀时请同步客户端播放地址
         ZLM_OVERLAY_SUFFIX=_ai
+        # 叠加取结果策略：
+        #   reuse = 每帧都用最近一次分析结果绘制（不跳帧，标注可能滞后）
+        #   skip  = 只绘制新鲜结果，来不及处理的帧不叠加（跳帧，帧照出但可能没有标注）
+        ZLM_OVERLAY_FRAME_POLICY=reuse
+        # 分析结果可复用的时长（毫秒），超出后不再绘制；0 = 按策略默认（reuse 5000 / skip 200）
+        ZLM_OVERLAY_RESULT_MAX_AGE_MS=0
+        # 分析器忙（上一轮未算完）时：skip = 跳过本轮（默认，不积压）；queue = 排队等上一轮结束
+        ZLM_ANALYSIS_BUSY_POLICY=skip
         """;
 }

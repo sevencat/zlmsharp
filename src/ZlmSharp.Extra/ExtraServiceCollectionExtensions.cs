@@ -8,6 +8,7 @@ using ZlmSharp.Configuration;
 using ZlmSharp.Extra.Analysis;
 using ZlmSharp.Extra.Capture;
 using ZlmSharp.Extra.Media;
+using ZlmSharp.Extra.Ocr;
 using ZlmSharp.Extra.Overlay;
 using ZlmSharp.Extra.Yolo;
 
@@ -23,15 +24,25 @@ public static class ExtraServiceCollectionExtensions
     {
         var builder = new ExtraBuilder(services);
 
-        // 内置分析器：YOLO（可查快照 + 可叠加）
+        // 内置分析器：YOLO（目标检测）+ OCR（文字识别），都可查快照 + 可叠加
         builder.AddAnalyzer<YoloAnalyzer>(options =>
+            options.Outputs = AnalysisOutputs.Snapshot | AnalysisOutputs.Overlay);
+        builder.AddAnalyzer<OcrAnalyzer>(options =>
             options.Outputs = AnalysisOutputs.Snapshot | AnalysisOutputs.Overlay);
 
         configure?.Invoke(builder);
 
+        // 推理后端：SimdYolo 源码存在时启用（SIMDYOLO），否则 IsAvailable=false，检测入口按未启用处理
         services.TryAddSingleton<IYoloBackendFactory>(UnavailableYoloBackendFactory.Instance);
+        services.Replace(ServiceDescriptor.Singleton<IYoloBackendFactory, SimdYoloBackendFactory>());
         services.TryAddSingleton(provider => YoloOptions.FromEnv(provider.GetRequiredService<AppOptions>().Env));
         services.TryAddSingleton<YoloDetectorService>();
+
+        // OCR：模型内置在 NuGet 包（tiny），也可用自定义 DET/REC/DICT
+        services.TryAddSingleton(provider => OcrOptions.FromEnv(provider.GetRequiredService<AppOptions>().Env));
+        services.TryAddSingleton(provider => new OcrEngineService(
+            provider.GetRequiredService<OcrOptions>(),
+            provider.GetService<ILoggerFactory>()?.CreateLogger<OcrEngineService>()));
 
         // 外部工具（ffmpeg/ffprobe）：全部媒体操作都走这个入口，方便换成 DLL 实现
         services.TryAddSingleton<IMediaToolkit>(provider =>
@@ -70,9 +81,20 @@ internal sealed class ExtraInitializer(
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var registry = provider.GetRequiredService<AnalyzerRegistry>();
+        var env = provider.GetRequiredService<AppOptions>().Env;
         foreach (var factory in analyzerFactories)
         {
-            registry.Register(factory(provider));
+            var registration = factory(provider);
+
+            // 采样间隔优先取各自 .env 配置（YOLO / OCR 独立），未配置的分析器走全局间隔
+            registration = registration.Analyzer switch
+            {
+                OcrAnalyzer => registration with { SampleIntervalMs = env.OcrSampleIntervalMs },
+                YoloAnalyzer => registration with { SampleIntervalMs = env.YoloSampleIntervalMs },
+                _ => registration,
+            };
+
+            registry.Register(registration);
         }
 
         var sinks = provider.GetRequiredService<AnalysisSinks>();

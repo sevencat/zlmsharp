@@ -34,6 +34,7 @@ internal sealed class AnalysisScheduler : BackgroundService
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<(StreamKey Key, string AnalyzerId), DateTime> _lastRun = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
+    private long _skippedSamples;
 
     public AnalysisScheduler(
         AnalyzerRegistry analyzers,
@@ -118,7 +119,7 @@ internal sealed class AnalysisScheduler : BackgroundService
                             return;
                         }
 
-                        if (!ShouldSample(key, registration, interval))
+                        if (!IsSampleDue(key, registration, interval))
                         {
                             continue;
                         }
@@ -160,28 +161,48 @@ internal sealed class AnalysisScheduler : BackgroundService
         }
     }
 
-    private bool ShouldSample(StreamKey key, AnalyzerRegistration registration, TimeSpan fallbackInterval)
+    /// <summary>只读判断是否到了采样时间（不写时间戳：忙时跳过不应推迟下一轮）。</summary>
+    private bool IsSampleDue(StreamKey key, AnalyzerRegistration registration, TimeSpan fallbackInterval)
     {
         var interval = registration.SampleIntervalMs > 0
             ? TimeSpan.FromMilliseconds(Math.Max(200, registration.SampleIntervalMs))
             : fallbackInterval;
 
-        var now = DateTime.UtcNow;
-        if (_lastRun.TryGetValue((key, registration.Analyzer.Id), out var last) && now - last < interval)
-        {
-            return false;
-        }
-
-        _lastRun[(key, registration.Analyzer.Id)] = now;
-        return true;
+        return !_lastRun.TryGetValue((key, registration.Analyzer.Id), out var last) ||
+               DateTime.UtcNow - last >= interval;
     }
+
+    private void MarkSample(StreamKey key, AnalyzerRegistration registration) =>
+        _lastRun[(key, registration.Analyzer.Id)] = DateTime.UtcNow;
 
     private async Task SampleAsync(MediaSource source, AnalyzerRegistration registration, CancellationToken cancellationToken)
     {
         var key = source.Key;
         var gate = _gates.GetOrAdd(registration.Analyzer.Id, _ => new SemaphoreSlim(1, 1));
 
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (_options.Env.AnalysisSkipWhenBusy)
+        {
+            // 跳帧模式：上一轮还没算完就跳过本轮，不排队、不积压
+            if (!gate.Wait(0))
+            {
+                Interlocked.Increment(ref _skippedSamples);
+                _logger.LogDebug(
+                    "分析器 {Id} 正忙，跳过本轮采样 {Key}（累计跳过 {Skipped} 次）",
+                    registration.Analyzer.Id,
+                    key,
+                    Volatile.Read(ref _skippedSamples));
+                return;
+            }
+
+            MarkSample(key, registration);
+        }
+        else
+        {
+            // 不跳帧模式：先记时间戳再排队，避免每个 tick 都排一个任务
+            MarkSample(key, registration);
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         try
         {
             var width = source.Video.Width;

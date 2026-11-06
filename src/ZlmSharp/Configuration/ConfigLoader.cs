@@ -105,6 +105,17 @@ public static class ConfigLoader
         var overlaySuffix = document.Get(EnvOptions.OverlaySuffixKey, string.Empty).Trim();
         env.OverlaySuffix = overlaySuffix.Length > 0 ? overlaySuffix : "_ai";
 
+        var framePolicy = document.Get(EnvOptions.OverlayFramePolicyKey, string.Empty).Trim().ToLowerInvariant();
+        env.OverlayFramePolicy = framePolicy is "skip" or "reuse" ? framePolicy : env.OverlayFramePolicy;
+        env.OverlayResultMaxAgeMs = ParseInt(
+            document.Get(EnvOptions.OverlayResultMaxAgeMsKey, string.Empty),
+            env.OverlayResultMaxAgeMs,
+            0,
+            3_600_000);
+
+        var busyPolicy = document.Get(EnvOptions.AnalysisBusyPolicyKey, string.Empty).Trim().ToLowerInvariant();
+        env.AnalysisBusyPolicy = busyPolicy is "skip" or "queue" ? busyPolicy : env.AnalysisBusyPolicy;
+
         // 未单独配置全局采样间隔时，沿用 YOLO 的采样间隔（兼容旧 .env）
         env.AnalysisSampleIntervalMs = ParseInt(
             document.Get(EnvOptions.AnalysisSampleIntervalMsKey, string.Empty),
@@ -113,6 +124,19 @@ public static class ConfigLoader
             3_600_000);
 
         env.AnalysisEnabled = document.Get(EnvOptions.AnalysisEnabledKey, string.Empty);
+
+        env.OcrEnable = document.Get(EnvOptions.OcrEnableKey, "0").Trim().ToLowerInvariant() is "1" or "true" or "on" or "yes";
+        var ocrModel = document.Get(EnvOptions.OcrModelKey, string.Empty).Trim().ToLowerInvariant();
+        env.OcrModel = ocrModel.Length > 0 ? ocrModel : env.OcrModel;
+        env.OcrDetModel = document.Get(EnvOptions.OcrDetModelKey, string.Empty).Trim();
+        env.OcrRecModel = document.Get(EnvOptions.OcrRecModelKey, string.Empty).Trim();
+        env.OcrClsModel = document.Get(EnvOptions.OcrClsModelKey, string.Empty).Trim();
+        env.OcrDict = document.Get(EnvOptions.OcrDictKey, string.Empty).Trim();
+        env.OcrMinScore = ParseFloat(document.Get(EnvOptions.OcrMinScoreKey, string.Empty), env.OcrMinScore);
+        env.OcrUseCls = document.Get(EnvOptions.OcrUseClsKey, "1") is not ("0" or "false" or "off" or "no");
+        env.OcrLineWorkers = ParseInt(document.Get(EnvOptions.OcrLineWorkersKey, string.Empty), env.OcrLineWorkers, 1, 64);
+        env.OcrSampleIntervalMs = ParseInt(document.Get(EnvOptions.OcrSampleIntervalMsKey, string.Empty), env.OcrSampleIntervalMs, 0, 3_600_000);
+
         env.ExtraEnable = document.Get(EnvOptions.ExtraEnableKey, "1") is not ("0" or "false" or "off" or "no");
         env.Raw = new Dictionary<string, string>(document.Values, StringComparer.OrdinalIgnoreCase);
     }

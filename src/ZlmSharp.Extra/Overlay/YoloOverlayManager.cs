@@ -20,8 +20,6 @@ namespace ZlmSharp.Extra.Overlay;
 /// </remarks>
 public sealed class YoloOverlayManager : IOverlayController, IDisposable
 {
-    private static readonly TimeSpan DefaultResultMaxAge = TimeSpan.FromSeconds(5);
-
     private readonly MediaSourceRegistry _registry;
     private readonly OverlayResultCache _results;
     private readonly OverlayComposer _composer;
@@ -157,7 +155,8 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
                 targetFps,
                 bitrate,
                 scaleValue,
-                DefaultResultMaxAge,
+                _options.Env.ResolveOverlayResultMaxAge(),
+                !_options.Env.OverlayReuseResult,
                 _logger);
 
             try
@@ -279,6 +278,10 @@ internal sealed class OverlaySession : IDisposable
     private readonly int _bitrateKbps;
     private readonly int _frameSize;
     private readonly TimeSpan _resultMaxAge;
+
+    /// <summary>true = 跳帧模式：每个分析结果只叠加一帧，没有新结果的帧不画。</summary>
+    private readonly bool _drawEachResultOnce;
+    private readonly Dictionary<string, DateTimeOffset> _drawnStamps = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger? _logger;
 
     private readonly CancellationTokenSource _cts = new();
@@ -309,6 +312,7 @@ internal sealed class OverlaySession : IDisposable
         int bitrateKbps,
         int labelScale,
         TimeSpan resultMaxAge,
+        bool drawEachResultOnce,
         ILogger? logger)
     {
         _key = key;
@@ -327,6 +331,7 @@ internal sealed class OverlaySession : IDisposable
         _bitrateKbps = bitrateKbps;
         _frameSize = checked(width * height * 3);
         _resultMaxAge = resultMaxAge;
+        _drawEachResultOnce = drawEachResultOnce;
         _logger = logger;
     }
 
@@ -464,7 +469,19 @@ internal sealed class OverlaySession : IDisposable
                 continue;
             }
 
+            // 跳帧模式：同一个分析结果只叠加一帧，避免用旧结果"假装实时"；
+            // 复用模式（默认）则一直画最近结果，画面流畅但标注可能滞后一个采样间隔。
+            if (_drawEachResultOnce && _drawnStamps.TryGetValue(result.AnalyzerId, out var drawn) && drawn >= result.At)
+            {
+                continue;
+            }
+
             _composer.Render(image, result);
+
+            if (_drawEachResultOnce)
+            {
+                _drawnStamps[result.AnalyzerId] = result.At;
+            }
         }
     }
 

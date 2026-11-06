@@ -309,10 +309,14 @@ public class YoloApiTests
 
         Assert.Equal(0, root.GetProperty("code").GetInt32());
         var data = root.GetProperty("data");
-        Assert.Equal(1, data.GetArrayLength());
-        var analyzer = data[0];
-        Assert.Equal("yolo", analyzer.GetProperty("id").GetString());
+        var analyzers = data.EnumerateArray().ToArray();
+
+        var analyzer = analyzers.Single(item => item.GetProperty("id").GetString() == "yolo");
         Assert.False(analyzer.GetProperty("enabled").GetBoolean());
+
+        // OCR 分析器随包注册，默认关闭（ZLM_OCR_ENABLE=0）
+        var ocr = analyzers.Single(item => item.GetProperty("id").GetString() == "ocr");
+        Assert.False(ocr.GetProperty("enabled").GetBoolean());
     }
 
     [Fact]

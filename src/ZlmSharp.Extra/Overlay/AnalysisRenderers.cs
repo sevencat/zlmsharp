@@ -95,6 +95,51 @@ public sealed class TextOverlayRenderer : IOverlayRenderer
     }
 }
 
+/// <summary>
+/// 中文文本（OCR 结果）：用内置 16×16 点阵字库绘制，中文/英文/数字混排都能显示，
+/// 不依赖系统字体或图形库。文本画在文本框下沿，越界时回到框内顶部。
+/// </summary>
+public sealed class ChineseTextOverlayRenderer : IOverlayRenderer
+{
+    public string Id => "text";
+
+    public void Render(RgbImage image, AnalysisResult result)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(result);
+
+        // 1080p 及以上用 2 倍字形（32px 高），小画面用 16px，兼顾清晰度与不遮挡
+        var scale = image.Height >= 1080 ? 2 : 1;
+
+        foreach (var primitive in result.Primitives)
+        {
+            if (primitive.Text is not { Length: > 0 } text)
+            {
+                continue;
+            }
+
+            var textWidth = ChineseBitmapFont.MeasureWidth(text, scale);
+            var left = (int)Math.Round(primitive.X ?? Math.Max(0, (image.Width - textWidth) / 2d));
+            var top = (int)Math.Round((primitive.Y ?? (image.Height / 2d)) + (primitive.Height ?? 0) + 2);
+            if (top + (16 * scale) + 4 > image.Height)
+            {
+                top = (int)Math.Round(primitive.Y ?? Math.Max(0, (image.Height / 2d) - (16 * scale)));
+            }
+
+            ChineseBitmapFont.DrawText(
+                image.Pixels,
+                image.Width,
+                image.Height,
+                image.Stride,
+                left,
+                Math.Max(0, top),
+                text,
+                (255, 255, 255),
+                scale);
+        }
+    }
+}
+
 /// <summary>一组 renderer 的合成器：同一路流可以同时画框、多边形与文本。</summary>
 public sealed class OverlayComposer
 {
@@ -109,12 +154,12 @@ public sealed class OverlayComposer
         return this;
     }
 
-    /// <summary>默认组合：框 + 多边形 + 文本（任何分析器的图元都能画出来）。</summary>
+    /// <summary>默认组合：框 + 多边形 + 中文文本（任何分析器的图元都能画出来）。</summary>
     public static OverlayComposer Default() =>
         new OverlayComposer()
             .Add(new BoxOverlayRenderer())
             .Add(new PolygonOverlayRenderer())
-            .Add(new TextOverlayRenderer());
+            .Add(new ChineseTextOverlayRenderer());
 
     public void Render(RgbImage image, AnalysisResult result)
     {

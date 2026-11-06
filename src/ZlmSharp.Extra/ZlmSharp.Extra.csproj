@@ -2,8 +2,17 @@
 
   <PropertyGroup>
     <RootNamespace>ZlmSharp.Extra</RootNamespace>
-    <!-- AI/分析的可选实现包：取帧（ffmpeg）、YOLO 分析、叠加管线、采样调度。
-         核心库只保留契约与顶层调用；推理引擎适配器仍作为独立项目接入（IYoloBackendFactory）。 -->
+    <!-- AI/分析的可选实现包：取帧（ffmpeg）、YOLO 分析、OCR 分析、叠加管线、采样调度。
+         核心库只保留契约与顶层调用。 -->
+  </PropertyGroup>
+
+  <!--
+    SimdYolo 源码放在仓库根的 /simdyolo（被 .gitignore 忽略，由部署方自行放置）。
+    存在时以项目引用接入并把推理后端编译进来（SIMDYOLO）；不存在时后端工厂退化为“不可用”，
+    其余功能（OCR、叠加）照常编译，保证克隆后没有该目录也能构建。
+  -->
+  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\simdyolo\src\SimdYolo\SimdYolo.csproj')">
+    <DefineConstants>$(DefineConstants);SIMDYOLO</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,6 +21,21 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\simdyolo\src\SimdYolo\SimdYolo.csproj')">
+    <ProjectReference Include="..\..\simdyolo\src\SimdYolo\SimdYolo.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 纯托管 PP-OCRv6 推理（netstandard2.0 分支可在 net8 使用），模型随 NuGet 包内置 -->
+    <PackageReference Include="Sdcb.SimdPaddleOCR" Version="1.4.2" />
+    <PackageReference Include="Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny" Version="1.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 内置 16×16 中文点阵字库（GB2312 全集 + ASCII），用于把 OCR 文本画进叠加画面 -->
+    <EmbeddedResource Include="Overlay\Fonts\hzk16.bin" />
   </ItemGroup>
 
 </Project>
