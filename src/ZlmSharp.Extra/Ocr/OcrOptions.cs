@@ -21,8 +21,8 @@ public sealed class OcrOptions
 
     public string DictPath { get; init; } = string.Empty;
 
-    /// <summary>识别分数下限，低于该值的文本行丢弃。</summary>
-    public float MinScore { get; init; } = 0.5f;
+    /// <summary>识别分数下限，低于该值的文本行丢弃（tiny 模型分数普遍偏低，默认 0.3）。</summary>
+    public float MinScore { get; init; } = 0.3f;
 
     public bool UseDirectionClassification { get; init; } = true;
 

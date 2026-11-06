@@ -11,12 +11,14 @@ public sealed class YoloAnalyzer : IStreamAnalyzer, IAnalyzerInfo, IImageAnalysi
     public const string AnalyzerId = "yolo";
 
     private readonly YoloDetectorService _detector;
+    private readonly Analysis.AnalysisModelSelection? _modelSelection;
     private readonly ConcurrentDictionary<string, TrackerState> _trackers = new(StringComparer.Ordinal);
 
-    public YoloAnalyzer(YoloDetectorService detector)
+    public YoloAnalyzer(YoloDetectorService detector, Analysis.AnalysisModelSelection? modelSelection = null)
     {
         ArgumentNullException.ThrowIfNull(detector);
         _detector = detector;
+        _modelSelection = modelSelection;
     }
 
     public string Id => AnalyzerId;
@@ -31,7 +33,9 @@ public sealed class YoloAnalyzer : IStreamAnalyzer, IAnalyzerInfo, IImageAnalysi
 
         try
         {
-            var result = await _detector.DetectAsync(frame.Image, cancellationToken: cancellationToken)
+            // 该流若通过 startOverlay&model=xxx.onnx 指定了模型，就用它；否则走全局默认模型
+            var model = _modelSelection?.Get(frame.Key);
+            var result = await _detector.DetectAsync(frame.Image, cancellationToken: cancellationToken, model: model)
                 .ConfigureAwait(false);
 
             // 跨帧分配稳定 ID（同一路流一个跟踪器；分辨率变化时重建，避免旧框坐标串台）

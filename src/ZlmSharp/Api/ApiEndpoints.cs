@@ -459,7 +459,7 @@ public static class ApiEndpoints
 
         try
         {
-            var status = overlays.Start(parameters with { AnalyzerId = YoloAnalyzerId });
+            var status = overlays.Start(parameters with { AnalyzerIds = [YoloAnalyzerId] });
             await WriteJsonAsync(
                 context,
                 new ApiYoloOverlayResponse(0, null, ToApiYoloOverlay(status)),
@@ -511,7 +511,10 @@ public static class ApiEndpoints
             ApiJsonContext.Default.ApiYoloOverlayListResponse);
     }
 
-    /// <summary>通用叠加：用任意分析器（<c>analyzer=</c>，缺省全部）的最新结果绘制 <c>{stream}_ai</c>。</summary>
+    /// <summary>
+    /// 通用叠加：用任意分析器（<c>analyzer=yolo</c> / <c>analyzer=ocr</c> / <c>analyzer=yolo,ocr</c>，缺省全部）
+    /// 的最新结果绘制 <c>{stream}_ai</c>；<c>model=xxx.onnx</c> 指定这一路流用的 YOLO 模型（缺省用分析器默认模型）。
+    /// </summary>
     private static async Task StartOverlayAsync(HttpContext context, AppOptions options, IOverlayController? overlays)
     {
         if (!await AuthorizeAsync(context, options))
@@ -617,11 +620,15 @@ public static class ApiEndpoints
         var bitrate = int.TryParse(query["bitrate"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBitrate)
             ? parsedBitrate
             : 0;
-        var analyzer = NullIfEmpty(query["analyzer"].ToString());
+        // analyzer=yolo / analyzer=ocr / analyzer=yolo,ocr；缺省 = 全部
+        var analyzers = query["analyzer"].ToString()
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var model = NullIfEmpty(query["model"].ToString());
 
         return new OverlayRequest(query["vhost"].ToString(), app, stream)
         {
-            AnalyzerId = analyzer,
+            AnalyzerIds = analyzers,
+            Model = model,
             Fps = fps,
             BitrateKbps = bitrate,
             LabelScale = 2,

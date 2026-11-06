@@ -45,7 +45,7 @@ scripts/
   build-web.ps1                   # 一键：装依赖 → 构建 → 回写后端 + 预压缩
   dev-web.ps1                     # 开发服务器（代理 /index/api、/live 到后端）
 src/ZlmSharp/WebUI/
-  index.html  index.html.br  index.html.gz    # 构建产物，随仓库入库
+  index.html.gz                    # 构建产物（gzip 预压缩），随仓库入库
 ```
 
 `web/dist`、`web/node_modules` 已在 `web/.gitignore` 中排除；**入库的是 `src/ZlmSharp/WebUI/index.html`**，因此普通开发和使用者不需要安装 Node。
@@ -57,9 +57,9 @@ src/ZlmSharp/WebUI/
 ```
 web/src/**  ──vite build──▶  web/dist/index.html（单文件）
                                    │
-                     postbuild.mjs │ + brotli/gzip
-                                   ▼
-                 src/ZlmSharp/WebUI/index.html(.br/.gz)
+                     postbuild.mjs │ + gzip
+                                    ▼
+                     src/ZlmSharp/WebUI/index.html.gz
                                    │
       ZlmSharp.csproj 标为 Content（库项目自身输出用）
                                    │
@@ -94,7 +94,7 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 
 1. **根目录解析**：`http.rootPath` 为相对路径时，以 `AppContext.BaseDirectory` 为基准（不是进程 CWD），避免作为 Windows 服务/计划任务启动时去 `System32` 找 `./WebUI`。
    兼容旧部署：若 `rootPath` 仍是**旧默认值 `./www`** 且该目录下没有页面，会回退到 `<程序目录>/WebUI/index.html`（只有这一个旧值会触发回退，用户显式指定的其它目录不做隐式兜底）。
-2. **预压缩协商**：按 `Accept-Encoding` 依次尝试 `index.html.br` → `index.html.gz` → `index.html`，命中则加 `Content-Encoding` 与 `Vary: Accept-Encoding`。
+2. **预压缩协商**：`Accept-Encoding` 接受 `gzip` 且内嵌 `index.html.gz` 存在时发压缩体（加 `Content-Encoding: gzip` 与 `Vary: Accept-Encoding`），否则回退到解压后的明文。
 3. **缓存**：`Cache-Control: no-cache` + `ETag`（长度 + 修改时间 + 编码后缀），带 `If-None-Match` 时直接 `304`，重复打开页面只传几百字节。
 4. **传输**：`Response.SendFileAsync`，不把整页读进内存（旧实现是每次 `ReadAllBytes`）。
 5. **缺失提示**：文件不存在时返回 404 纯文本，写明期望的绝对路径，便于排错。
@@ -185,13 +185,13 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 | 指标 | 数值 |
 |---|---|
 | `index.html`（未压缩） | 1,652,220 B ≈ **1.58 MB** |
-| `index.html.br`（质量 11） | 252,580 B ≈ **247 KB** |
 | `index.html.gz`（等级 9） | 324,757 B ≈ **317 KB** |
 | 构建耗时 | ≈ 2.6 s（56 modules） |
 
-> 其中品牌图标（128×128 PNG，base64 约 40 KB）贡献了约 30 KB 的 Brotli 体积；若需进一步瘦身，可把 `web/src/assets/app-icon.png` 缩到 64×64。
+> 其中品牌图标（128×128 PNG，base64 约 40 KB）贡献了约 30 KB 的压缩体积；若需进一步瘦身，可把 `web/src/assets/app-icon.png` 缩到 64×64。
 
-- 首屏传输走 Brotli ≈ 216 KB；二次打开走 `304`，约 0 字节。
+- 首屏传输走 gzip ≈ 317 KB；二次打开走 `304`，约 0 字节。
+- 只保留 gzip（不再生成 brotli）：两者体积仅差几十 KB，少一份内嵌资源、少一条协商分支。
 - 体积主要来自：Buefy 全量注册（含 Bulma 样式）、`mpegts.js`、Vue runtime。
 - 如需瘦身（按需）：
   1. Buefy 改为按需注册（`app.use(BButton)` 等），只引使用的组件；

@@ -25,6 +25,7 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
     private readonly OverlayComposer _composer;
     private readonly IMediaToolkit _media;
     private readonly AppOptions _options;
+    private readonly AnalysisModelSelection? _modelSelection;
     private readonly string _suffix;
     private readonly ILogger? _logger;
     private readonly ConcurrentDictionary<StreamKey, OverlaySession> _sessions = new();
@@ -37,7 +38,8 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
         OverlayResultCache results,
         OverlayComposer composer,
         IMediaToolkit media,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        AnalysisModelSelection? modelSelection = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(options);
@@ -50,6 +52,7 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
         _results = results;
         _composer = composer;
         _media = media;
+        _modelSelection = modelSelection;
         _suffix = options.Env.OverlaySuffix;
         _logger = logger;
     }
@@ -72,7 +75,8 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
         int? fps = null,
         int bitrateKbps = 0,
         int labelScale = 2,
-        string? analyzerId = null)
+        IReadOnlyList<string>? analyzerIds = null,
+        string? model = null)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
@@ -145,7 +149,7 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
                 sourceHeight,
                 _results,
                 _composer,
-                analyzerId,
+                analyzerIds,
                 _media,
                 inputUrl,
                 outputUrl,
@@ -170,14 +174,20 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
             }
 
             _sessions[key] = session;
+
+            // 这一路流用哪个模型（只影响本流；停叠加时清除）
+            _modelSelection?.Set(key, model);
+
             _logger?.LogInformation(
-                "结果叠加流启动 {Key} → {Output}（{Width}x{Height}@{Fps}fps，{Bitrate}kbps）",
+                "结果叠加流启动 {Key} → {Output}（{Width}x{Height}@{Fps}fps，{Bitrate}kbps，analyzers={Analyzers}，model={Model}）",
                 key,
                 outputUrl,
                 width,
                 height,
                 targetFps,
-                bitrate);
+                bitrate,
+                analyzerIds is { Count: > 0 } ? string.Join(",", analyzerIds) : "全部",
+                string.IsNullOrWhiteSpace(model) ? "默认" : model);
 
             return session.Snapshot();
         }
@@ -198,6 +208,7 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
         }
 
         session.Dispose();
+        _modelSelection?.Remove(key);
         _logger?.LogInformation("结果叠加流停止 {Key}", key);
         return true;
     }
@@ -227,7 +238,15 @@ public sealed class YoloOverlayManager : IOverlayController, IDisposable
             .ToArray();
 
     OverlayStatus IOverlayController.Start(OverlayRequest request) =>
-        Start(request.Vhost, request.App, request.Stream, request.Fps, request.BitrateKbps, request.LabelScale, request.AnalyzerId);
+        Start(
+            request.Vhost,
+            request.App,
+            request.Stream,
+            request.Fps,
+            request.BitrateKbps,
+            request.LabelScale,
+            request.AnalyzerIds,
+            request.Model);
 
     public void Dispose()
     {
@@ -267,7 +286,7 @@ internal sealed class OverlaySession : IDisposable
     private readonly int _sourceHeight;
     private readonly OverlayResultCache _results;
     private readonly OverlayComposer _composer;
-    private readonly string? _analyzerId;
+    private readonly IReadOnlyList<string> _analyzerIds;
     private readonly IMediaToolkit _media;
     private readonly string _inputUrl;
     private readonly string _outputUrl;
@@ -301,7 +320,7 @@ internal sealed class OverlaySession : IDisposable
         int sourceHeight,
         OverlayResultCache results,
         OverlayComposer composer,
-        string? analyzerId,
+        IReadOnlyList<string>? analyzerIds,
         IMediaToolkit media,
         string inputUrl,
         string outputUrl,
@@ -320,7 +339,7 @@ internal sealed class OverlaySession : IDisposable
         _sourceHeight = sourceHeight;
         _results = results;
         _composer = composer;
-        _analyzerId = analyzerId;
+        _analyzerIds = analyzerIds is { Count: > 0 } ? analyzerIds : [];
         _media = media;
         _inputUrl = inputUrl;
         _outputUrl = outputUrl;
@@ -454,7 +473,8 @@ internal sealed class OverlaySession : IDisposable
         var image = new RgbImage(buffer, _width, _height, stride);
         foreach (var result in results)
         {
-            if (_analyzerId is { Length: > 0 } && !string.Equals(result.AnalyzerId, _analyzerId, StringComparison.OrdinalIgnoreCase))
+            if (_analyzerIds.Count > 0 &&
+                !_analyzerIds.Contains(result.AnalyzerId, StringComparer.OrdinalIgnoreCase))
             {
                 continue;
             }

@@ -13,7 +13,10 @@ const stream = ref('')
 const analyzerFilter = ref('')
 const playing = ref<{ app: string; stream: string } | null>(null)
 
-const overlayForm = reactive({ app: 'live', stream: '', analyzer: '', fps: 0 })
+const overlayForm = reactive({ app: 'live', stream: '', analyzers: [] as string[], model: '', fps: 0 })
+
+/** YOLO 可选模型（来自 getAnalyzerList 的 models 字段，即 ZLM_YOLO_MODEL_DIR 下的文件） */
+const yoloModels = computed(() => analyzers.value.find((item) => item.id === 'yolo')?.models ?? [])
 
 const playActive = computed({
   get: () => playing.value !== null,
@@ -51,7 +54,8 @@ const startOverlay = () =>
     const status = await call<OverlayState>('startOverlay', {
       app: overlayForm.app,
       stream: overlayForm.stream,
-      analyzer: overlayForm.analyzer || undefined,
+      analyzer: overlayForm.analyzers.length > 0 ? overlayForm.analyzers.join(',') : undefined,
+      model: overlayForm.model || undefined,
       fps: overlayForm.fps || undefined,
     })
     toast('success', `叠加流已启动：${status.overlayStream}`, 6000)
@@ -162,9 +166,22 @@ onMounted(async () => {
       <div class="toolbar">
         <b-input v-model="overlayForm.app" size="is-small" placeholder="app" />
         <b-input v-model="overlayForm.stream" size="is-small" placeholder="stream" />
-        <b-select v-model="overlayForm.analyzer" size="is-small" placeholder="分析器（全部）">
-          <option value="">全部</option>
-          <option v-for="item in analyzers" :key="item.id" :value="item.id">{{ item.displayName }}</option>
+        <b-select
+          v-model="overlayForm.analyzers"
+          size="is-small"
+          multiple
+          placeholder="分析器（不选=全部）"
+        >
+          <option
+            v-for="item in analyzers"
+            :key="item.id"
+            :value="item.id"
+            :disabled="!item.enabled"
+          >{{ item.displayName }}{{ item.enabled ? '' : '（未启用）' }}</option>
+        </b-select>
+        <b-select v-model="overlayForm.model" size="is-small" placeholder="模型（默认）">
+          <option value="">默认模型</option>
+          <option v-for="name in yoloModels" :key="name" :value="name">{{ name }}</option>
         </b-select>
         <b-input v-model.number="overlayForm.fps" size="is-small" type="number" placeholder="fps（0=自动）" />
         <b-button size="is-small" type="is-primary" icon-left="flash" :loading="busy === 'start'" @click="startOverlay">

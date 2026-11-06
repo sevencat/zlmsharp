@@ -126,8 +126,11 @@ public sealed class EnvOptions
     /// <summary>自定义字典文件（.txt，每行一个字符）。</summary>
     public string OcrDict { get; set; } = string.Empty;
 
-    /// <summary>识别分数下限（0~1），低于该值的文本行丢弃。</summary>
-    public float OcrMinScore { get; set; } = 0.5f;
+    /// <summary>
+    /// 识别分数下限（0~1），低于该值的文本行丢弃。
+    /// PP-OCRv6 tiny 的分数普遍偏低（实测常见 0.3~0.5），默认 0.3 比较合适。
+    /// </summary>
+    public float OcrMinScore { get; set; } = 0.3f;
 
     /// <summary>是否用方向分类模型纠正倒置文本，默认开启。</summary>
     public bool OcrUseCls { get; set; } = true;

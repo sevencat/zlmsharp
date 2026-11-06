@@ -12,14 +12,26 @@ public enum OverlayState
 /// <summary>开始（或重启）一路叠加流的请求。</summary>
 public sealed record OverlayRequest(string Vhost, string App, string Stream)
 {
-    /// <summary>只用哪个分析器的结果绘制；空表示全部有叠加输出的分析器。</summary>
-    public string? AnalyzerId { get; init; }
+    /// <summary>
+    /// 只用这些分析器的结果绘制（可多选，如 <c>yolo,ocr</c>）；
+    /// 空表示全部有叠加输出的分析器。
+    /// </summary>
+    public IReadOnlyList<string> AnalyzerIds { get; init; } = [];
+
+    /// <summary>
+    /// 该叠加流使用的推理模型（YOLO 的模型文件名或路径，如 <c>helmet.onnx</c>）；
+    /// 空表示用分析器配置的默认模型。只影响这一路流，不改变全局默认。
+    /// </summary>
+    public string? Model { get; init; }
 
     public int? Fps { get; init; }
 
     public int BitrateKbps { get; init; }
 
     public int LabelScale { get; init; } = 2;
+
+    /// <summary>兼容单值访问：只选了一个分析器时返回它，多选/未选返回 null。</summary>
+    public string? AnalyzerId => AnalyzerIds.Count == 1 ? AnalyzerIds[0] : null;
 }
 
 /// <summary>一路叠加流（<c>{stream}_ai</c>）的运行状态。</summary>

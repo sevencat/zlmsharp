@@ -10,9 +10,9 @@ namespace ZlmSharp.Server;
 /// 内置管理页面：挂在 <c>/zlm/admin</c> 下，<c>GET /zlm/admin</c>（等价 <c>/zlm/admin/</c>）返回单文件 <c>index.html</c>
 /// （前端由 web/ 工程构建：Vue 3 + Buefy + singlefile）。
 /// <para>
-/// 页面以<b>预压缩资源</b>形式内嵌在程序集里（<c>index.html.br</c> / <c>index.html.gz</c>），
-/// 部署时不需要随 exe 附带 WebUI 目录；按 <c>Accept-Encoding</c> 协商选择 brotli 或 gzip，
-/// 客户端两者都不支持时回退到解压后的明文（HTTP/1.0、curl、旧内核浏览器也能打开）。
+/// 页面以<b>预压缩资源</b>形式内嵌在程序集里（<c>index.html.gz</c>），
+/// 部署时不需要随 exe 附带 WebUI 目录；客户端支持 gzip 时直接发压缩体，
+/// 不支持时回退到解压后的明文（HTTP/1.0、curl、旧内核浏览器也能打开）。
 /// </para>
 /// 支持 <c>ETag</c> + <c>If-None-Match</c>，重复打开页面只回 304。
 /// 不占用 <c>/</c>（留给宿主），也不会与 <c>/index/api/*</c>、HTTP-FLV 的 catch-all 冲突。
@@ -25,8 +25,6 @@ internal static class AdminPageEndpoints
     private const string FileName = "index.html";
 
     /// <summary>内嵌资源名（与 ZlmSharp.csproj 的 LogicalName 一致）。</summary>
-    private const string BrotliResource = "ZlmSharp.WebUI.index.html.br";
-
     private const string GzipResource = "ZlmSharp.WebUI.index.html.gz";
 
     private const string ContentType = "text/html; charset=utf-8";
@@ -70,7 +68,7 @@ internal static class AdminPageEndpoints
 
         var (resourceName, encoding) = PickResource(assembly, accept);
 
-        // 客户端不支持 br/gzip（curl、HTTP/1.0、旧内核浏览器）：回退到解压后的明文，
+        // 客户端不支持 gzip（curl、HTTP/1.0、旧内核浏览器）：回退到解压后的明文，
         // 不能直接 406，否则这些客户端完全打不开控制台。
         var etag = resourceName is null
             ? PlainEtag(assembly)
@@ -97,7 +95,7 @@ internal static class AdminPageEndpoints
                 await NotFoundAsync(
                         context,
                         "管理页面资源缺失：请先在 web/ 目录执行 npm run build"
-                        + "（会把 index.html.br / .gz 写回 src/ZlmSharp/WebUI/）。")
+                        + "（会把 index.html.gz 写回 src/ZlmSharp/WebUI/）。")
                     .ConfigureAwait(false);
                 return;
             }
@@ -112,7 +110,7 @@ internal static class AdminPageEndpoints
             await NotFoundAsync(
                     context,
                     $"管理页面资源缺失：{resourceName}{Environment.NewLine}"
-                    + "请先在 web/ 目录执行 npm run build（会把 index.html.br / .gz 写回 src/ZlmSharp/WebUI/）。")
+                    + "请先在 web/ 目录执行 npm run build（会把 index.html.gz 写回 src/ZlmSharp/WebUI/）。")
                 .ConfigureAwait(false);
             return;
         }
@@ -130,7 +128,7 @@ internal static class AdminPageEndpoints
     private static string PlainEtag(System.Reflection.Assembly assembly) =>
         $"\"plain-{PlainHtml.Value?.Length ?? 0:x}-{assembly.ManifestModule.ModuleVersionId:N}\"";
 
-    /// <summary>解压后的明文页面（只在客户端不支持 br/gzip 时用到），进程内缓存一次。</summary>
+    /// <summary>解压后的明文页面（只在客户端不支持 gzip 时用到），进程内缓存一次。</summary>
     private static readonly Lazy<byte[]?> PlainHtml = new(DecodeEmbedded, LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static byte[]? DecodeEmbedded()
@@ -148,30 +146,14 @@ internal static class AdminPageEndpoints
             }
         }
 
-        if (assembly.GetManifestResourceStream(BrotliResource) is { } br)
-        {
-            using (br)
-            using (var unbrotli = new BrotliStream(br, CompressionMode.Decompress))
-            using (var buffer = new MemoryStream())
-            {
-                unbrotli.CopyTo(buffer);
-                return buffer.ToArray();
-            }
-        }
-
         return null;
     }
 
-    /// <summary>挑选内嵌资源：优先 br，其次 gzip；都不可用返回 (null, null)。</summary>
+    /// <summary>客户端接受 gzip 且资源存在时返回 gzip 资源；否则返回 (null, null) 走明文。</summary>
     private static (string? Resource, string? Encoding) PickResource(
         System.Reflection.Assembly assembly,
         string accept)
     {
-        if (Accepts(accept, "br") && assembly.GetManifestResourceInfo(BrotliResource) is not null)
-        {
-            return (BrotliResource, "br");
-        }
-
         if (Accepts(accept, "gzip") && assembly.GetManifestResourceInfo(GzipResource) is not null)
         {
             return (GzipResource, "gzip");

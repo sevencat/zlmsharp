@@ -29,7 +29,7 @@
 
   <ItemGroup>
     <!-- 纯托管 PP-OCRv6 推理（netstandard2.0 分支可在 net8 使用），模型随 NuGet 包内置 -->
-    <PackageReference Include="Sdcb.SimdPaddleOCR" Version="1.4.2" />
+    <PackageReference Include="Sdcb.SimdPaddleOCR" Version="2.0.0" />
     <PackageReference Include="Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny" Version="1.0.0" />
   </ItemGroup>
 

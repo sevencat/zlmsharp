@@ -11,7 +11,7 @@ using ZlmSharp.Server;
 namespace ZlmSharp.Tests;
 
 /// <summary>
-/// 内置管理页面：单文件 html 内嵌在程序集里（br/gz 预压缩），
+/// 内置管理页面：单文件 html 内嵌在程序集里（gz 预压缩），
 /// 支持 Accept-Encoding 协商、明文回退与 ETag，且不遮蔽 API / HTTP-FLV 路由。
 /// </summary>
 public class AdminPageTests
@@ -44,10 +44,11 @@ public class AdminPageTests
 
         using var client = CreateClient();
 
-        var (brStatus, brEncoding, brLength) = await GetAsync(client, $"{address}{PagePath}", "br, gzip");
-        Assert.Equal(HttpStatusCode.OK, brStatus);
-        Assert.Equal("br", brEncoding);
-        Assert.True(brLength > 0);
+        // 只保留 gzip：客户端即使同时接受 br，也只会拿到 gzip
+        var (bothStatus, bothEncoding, bothLength) = await GetAsync(client, $"{address}{PagePath}", "br, gzip");
+        Assert.Equal(HttpStatusCode.OK, bothStatus);
+        Assert.Equal("gzip", bothEncoding);
+        Assert.True(bothLength > 0);
 
         var (gzStatus, gzEncoding, gzLength) = await GetAsync(client, $"{address}{PagePath}", "gzip");
         Assert.Equal(HttpStatusCode.OK, gzStatus);
@@ -81,10 +82,11 @@ public class AdminPageTests
         Assert.Equal(HttpStatusCode.NotModified, second.StatusCode);
 
         // 压缩版与明文版内容不同，ETag 必须不同，否则缓存会串
-        using var brRequest = new HttpRequestMessage(HttpMethod.Get, $"{address}{PagePath}");
-        brRequest.Headers.TryAddWithoutValidation("Accept-Encoding", "br");
-        using var brResponse = await client.SendAsync(brRequest);
-        Assert.NotEqual(etag, brResponse.Headers.ETag?.Tag);
+        using var gzipRequest = new HttpRequestMessage(HttpMethod.Get, $"{address}{PagePath}");
+        gzipRequest.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip");
+        using var gzipResponse = await client.SendAsync(gzipRequest);
+        Assert.Equal("gzip", gzipResponse.Content.Headers.ContentEncoding.FirstOrDefault());
+        Assert.NotEqual(etag, gzipResponse.Headers.ETag?.Tag);
     }
 
     [Fact]

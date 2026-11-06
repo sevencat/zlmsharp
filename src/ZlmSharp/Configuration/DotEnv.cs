@@ -251,7 +251,7 @@ public static class DefaultEnv
         ZLM_OCR_CLS_MODEL=
         ZLM_OCR_DICT=
         # 识别分数下限 0~1 / 是否启用方向分类 / 文本行并行识别线程数
-        ZLM_OCR_MIN_SCORE=0.5
+        ZLM_OCR_MIN_SCORE=0.3
         ZLM_OCR_USE_CLS=1
         ZLM_OCR_LINE_WORKERS=1
         # 同一路流两次 OCR 的最小间隔（毫秒）

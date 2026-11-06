@@ -55,6 +55,10 @@ public static class ExtraServiceCollectionExtensions
             provider.GetService<ILoggerFactory>()?.CreateLogger<FfmpegDecoderPool>()));
         services.TryAddSingleton<OverlayResultCache>();
         services.TryAddSingleton<OverlayComposer>(OverlayComposer.Default());
+
+        // 按流指定推理模型（startOverlay&model=xxx.onnx）：叠加启动写入，分析采样读取
+        services.TryAddSingleton<AnalysisModelSelection>();
+
         services.TryAddSingleton<YoloOverlayManager>();
         services.TryAddSingleton<AnalysisSinks>();
         services.TryAddSingleton<AnalysisHost>();

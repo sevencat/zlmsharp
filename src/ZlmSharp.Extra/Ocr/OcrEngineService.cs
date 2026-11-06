@@ -7,13 +7,19 @@ namespace ZlmSharp.Extra.Ocr;
 
 /// <summary>
 /// OCR 引擎持有者：首次分析时懒加载 PP-OCRv6 模型（内置 tiny，或自定义 DET/REC/DICT），
-/// 之后复用同一会话。会话本身不支持并发，串行化由分析调度（每分析器一把锁）保证。
+/// 之后复用同一会话。
 /// </summary>
+/// <remarks>
+/// PaddleOcrAll 的推理会话<b>不可重入</b>（内部有共享缓冲/线程池），并发调用会读到坏数据甚至让进程崩溃。
+/// 分析调度器只对同一分析器串行，但 HTTP 单图分析（analyzeDetect）和叠加调度可能同时进来，
+/// 所以这里再加一把全局锁，所有推理调用与释放都串行。
+/// </remarks>
 public sealed class OcrEngineService : IDisposable
 {
     private readonly OcrOptions _options;
     private readonly ILogger? _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _runGate = new(1, 1);
 
     private PaddleOcrAll? _engine;
     private Exception? _error;
@@ -46,8 +52,19 @@ public sealed class OcrEngineService : IDisposable
 
         var engine = await EnsureEngineAsync(cancellationToken).ConfigureAwait(false);
 
-        // PaddleOcrAll.Run 接收交错像素内存：RgbImage 是 RGB24，可直接传
-        return engine.Run(image.Pixels, image.Width, image.Height, image.Stride, ImagePixelFormat.Rgb24);
+        // 会话不可重入：HTTP 单图分析与叠加调度可能并发，必须串行
+        await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+            // PaddleOcrAll.Run 接收交错像素内存：RgbImage 是 RGB24，可直接传
+            return engine.Run(image.Pixels, image.Width, image.Height, image.Stride, ImagePixelFormat.Rgb24);
+        }
+        finally
+        {
+            _runGate.Release();
+        }
     }
 
     private async Task<PaddleOcrAll> EnsureEngineAsync(CancellationToken cancellationToken)
@@ -122,8 +139,22 @@ public sealed class OcrEngineService : IDisposable
             return;
         }
 
-        _engine?.Dispose();
-        _engine = null;
-        _gate.Dispose();
+        // 等在途推理结束再释放：Run 与 Dispose 竞争会让推理库读到已释放的缓冲
+        var acquired = _runGate.Wait(TimeSpan.FromSeconds(5));
+        try
+        {
+            _engine?.Dispose();
+            _engine = null;
+        }
+        finally
+        {
+            if (acquired)
+            {
+                _runGate.Release();
+            }
+
+            _gate.Dispose();
+            _runGate.Dispose();
+        }
     }
 }

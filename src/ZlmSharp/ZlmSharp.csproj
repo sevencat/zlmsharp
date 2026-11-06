@@ -26,17 +26,12 @@
   </ItemGroup>
 
   <!--
-    内置管理页面（单文件 html）：只保留预压缩版本（brotli / gzip）并内嵌进程序集，
+    内置管理页面（单文件 html）：只保留 gzip 预压缩版本并内嵌进程序集，
     发布产物里不再有 WebUI 目录，部署只需要 exe + zlmsharp.ini。
-    运行期由 AdminPageEndpoints 从嵌入资源读取，按 Accept-Encoding 协商（都不支持则 406）。
-    产物由 web/ 工程生成：`npm run build` 会把 index.html.br / .gz 写回这里。
+    运行期由 AdminPageEndpoints 从嵌入资源读取，客户端支持 gzip 就发压缩体，否则回退明文。
+    产物由 web/ 工程生成：`npm run build` 会把 index.html.gz 写回这里。
   -->
   <ItemGroup>
-    <None Remove="WebUI\index.html.br" Condition="Exists('WebUI\index.html.br')" />
-    <EmbeddedResource Include="WebUI\index.html.br"
-                      Condition="Exists('WebUI\index.html.br')"
-                      LogicalName="ZlmSharp.WebUI.index.html.br" />
-
     <None Remove="WebUI\index.html.gz" Condition="Exists('WebUI\index.html.gz')" />
     <EmbeddedResource Include="WebUI\index.html.gz"
                       Condition="Exists('WebUI\index.html.gz')"
