@@ -1,16 +1,15 @@
 // 构建后处理：把 dist/index.html 压缩成 .gz 写回后端 WebUI 目录。
-// 后端只把这一个压缩文件内嵌进程序集（ZlmSharp.csproj 的 EmbeddedResource），
-// 未压缩的 index.html 不再写入磁盘，发布产物里也不需要 WebUI 目录。
+// 与 web/（Buefy 版）共用同一个部署位置，因此构建 Quasar 版就等于切换线上页面。
 import { gzipSync } from 'node:zlib'
 import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const webRoot = resolve(here, '..')
-const repoRoot = resolve(webRoot, '..')
+const projectRoot = resolve(here, '..')
+const repoRoot = resolve(projectRoot, '..')
 
-const source = resolve(webRoot, 'dist/index.html')
+const source = resolve(projectRoot, 'dist/index.html')
 const targetDir = resolve(repoRoot, 'src/ZlmSharp/WebUI')
 const target = resolve(targetDir, 'index.html')
 

@@ -20,3 +20,4 @@ log/
 /web/package-lock.json
 /simdyolo
 /publish-nuget.bat
+/web-quasar/package-lock.json

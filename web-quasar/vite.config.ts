@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { quasar, transformAssetUrls } from '@quasar/vite-plugin'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 
 /** 后端默认监听地址（见 zlmsharp.ini 的 http.port，缺省 8080） */
@@ -8,11 +9,11 @@ const backend = process.env.ZLMSHARP_BACKEND ?? 'http://127.0.0.1:8080'
 export default defineConfig({
   // 单文件产物用相对引用，避免部署到子路径时资源 404
   base: './',
-  plugins: [vue(), viteSingleFile()],
+  plugins: [vue({ template: { transformAssetUrls } }), quasar(), viteSingleFile()],
   build: {
     target: 'es2020',
     cssCodeSplit: false,
-    // 图标字体、woff2 之类也全部内联，保证产物只有一个 index.html
+    // 图片/字体一律内联，保证产物只有一个 index.html
     assetsInlineLimit: Infinity,
     chunkSizeWarningLimit: 8192,
     rollupOptions: {
@@ -20,7 +21,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 5174,
     strictPort: true,
     proxy: {
       // REST API

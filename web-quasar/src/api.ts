@@ -116,6 +116,12 @@ export async function call<T = any>(name: string, params: Record<string, unknown
   return (body?.data ?? body) as T
 }
 
+/** 返回数组的接口统一走这里：后端在"功能未启用"时可能给 null/空体，这里兜底成空数组 */
+export async function callList<T = any>(name: string, params: Record<string, unknown> = {}): Promise<T[]> {
+  const data = await call<unknown>(name, params)
+  return Array.isArray(data) ? (data as T[]) : []
+}
+
 /** HTTP-FLV 拉流地址（同源，交给 mpegts.js 播放） */
 export const flvUrl = (app: string, stream: string) =>
   `/${encodeURIComponent(app)}/${encodeURIComponent(stream)}.live.flv`

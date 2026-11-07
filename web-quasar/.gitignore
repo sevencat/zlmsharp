@@ -1,4 +1,4 @@
 node_modules/
 dist/
+src/assets/app-icon.png
 *.local
-.vite/

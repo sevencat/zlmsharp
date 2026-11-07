@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import { call } from './api'
+import { call, callList } from './api'
 import type { MediaInfo, OverlayState, RecordState, VersionInfo } from './types'
 
 export const state = reactive({
@@ -31,7 +31,7 @@ export async function refresh() {
     }
 
     try {
-      state.media = await call<MediaInfo[]>('getMediaList')
+      state.media = await callList<MediaInfo>('getMediaList')
       state.mediaError = ''
     } catch (error) {
       state.mediaError = message(error)
@@ -39,14 +39,14 @@ export async function refresh() {
 
     // 录像未启用时返回空数组，不当作错误
     try {
-      state.recordings = await call<RecordState[]>('getRecordList')
+      state.recordings = await callList<RecordState>('getRecordList')
     } catch {
       state.recordings = []
     }
 
     // 未装 Extra 时返回空数组，不当作错误
     try {
-      state.overlays = await call<OverlayState[]>('getOverlay')
+      state.overlays = await callList<OverlayState>('getOverlay')
     } catch {
       state.overlays = []
     }
