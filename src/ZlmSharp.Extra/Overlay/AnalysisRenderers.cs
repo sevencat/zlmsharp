@@ -1,3 +1,4 @@
+using GlyphRaster;
 using ZlmSharp.Ai;
 using ZlmSharp.Ai.Analysis;
 
@@ -70,7 +71,10 @@ public sealed class PolygonOverlayRenderer : IOverlayRenderer
     }
 }
 
-/// <summary>文本（OCR 识别结果）：画在文本锚点处，坐标缺失时居中。</summary>
+/// <summary>
+/// 文本（OCR 识别结果）：用内置字体（GlyphRaster）绘制，中文/英文/数字混排都能显示，
+/// 不依赖系统字体或图形库。有文本框时画在框下沿，否则画在锚点处，坐标缺失时居中。
+/// </summary>
 public sealed class TextOverlayRenderer : IOverlayRenderer
 {
     public string Id => "text";
@@ -80,36 +84,9 @@ public sealed class TextOverlayRenderer : IOverlayRenderer
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(result);
 
-        foreach (var primitive in result.Primitives)
-        {
-            if (primitive.Text is not { Length: > 0 } text)
-            {
-                continue;
-            }
-
-            var x = primitive.X ?? Math.Max(0, (image.Width - (text.Length * 12d)) / 2);
-            var y = primitive.Y ?? Math.Max(0, image.Height / 2d);
-            FrameOverlay.DrawLabel(image.Pixels, image.Width, image.Height, image.Stride,
-                (float)x, (float)y, text, BoxOverlayRenderer.ColorOf(primitive));
-        }
-    }
-}
-
-/// <summary>
-/// 中文文本（OCR 结果）：用内置 16×16 点阵字库绘制，中文/英文/数字混排都能显示，
-/// 不依赖系统字体或图形库。文本画在文本框下沿，越界时回到框内顶部。
-/// </summary>
-public sealed class ChineseTextOverlayRenderer : IOverlayRenderer
-{
-    public string Id => "text";
-
-    public void Render(RgbImage image, AnalysisResult result)
-    {
-        ArgumentNullException.ThrowIfNull(image);
-        ArgumentNullException.ThrowIfNull(result);
-
-        // 1080p 及以上用 2 倍字形（32px 高），小画面用 16px，兼顾清晰度与不遮挡
-        var scale = image.Height >= 1080 ? 2 : 1;
+        var fontSize = FontSizeOf(image);
+        var padding = Math.Max(2, (int)MathF.Round(fontSize / 8f));
+        var font = TextFont.BuiltIn;
 
         foreach (var primitive in result.Primitives)
         {
@@ -118,26 +95,28 @@ public sealed class ChineseTextOverlayRenderer : IOverlayRenderer
                 continue;
             }
 
-            var textWidth = ChineseBitmapFont.MeasureWidth(text, scale);
-            var left = (int)Math.Round(primitive.X ?? Math.Max(0, (image.Width - textWidth) / 2d));
-            var top = (int)Math.Round((primitive.Y ?? (image.Height / 2d)) + (primitive.Height ?? 0) + 2);
-            if (top + (16 * scale) + 4 > image.Height)
-            {
-                top = (int)Math.Round(primitive.Y ?? Math.Max(0, (image.Height / 2d) - (16 * scale)));
-            }
+            var layout = font.Layout(text, fontSize);
+            var left = primitive.X ?? Math.Max(0f, (image.Width - layout.Width) / 2f);
+            var top = primitive.Y is { } anchorY
+                ? anchorY + (primitive.Height ?? 0d) + 2d
+                : Math.Max(0d, (image.Height - layout.Height) / 2d);
 
-            ChineseBitmapFont.DrawText(
+            FrameOverlay.DrawText(
                 image.Pixels,
                 image.Width,
                 image.Height,
                 image.Stride,
-                left,
-                Math.Max(0, top),
-                text,
-                (255, 255, 255),
-                scale);
+                (int)MathF.Round((float)left),
+                (int)MathF.Round((float)top),
+                layout,
+                BoxOverlayRenderer.ColorOf(primitive),
+                padding);
         }
     }
+
+    /// <summary>按画面高度取字号：1080p 用 24px，720p 用 20px，更小的画面用 16px。</summary>
+    private static float FontSizeOf(RgbImage image) =>
+        image.Height >= 1080 ? 24f : image.Height >= 720 ? 20f : 16f;
 }
 
 /// <summary>一组 renderer 的合成器：同一路流可以同时画框、多边形与文本。</summary>
@@ -154,12 +133,12 @@ public sealed class OverlayComposer
         return this;
     }
 
-    /// <summary>默认组合：框 + 多边形 + 中文文本（任何分析器的图元都能画出来）。</summary>
+    /// <summary>默认组合：框 + 多边形 + 文本（任何分析器的图元都能画出来，中文由内置字体渲染）。</summary>
     public static OverlayComposer Default() =>
         new OverlayComposer()
             .Add(new BoxOverlayRenderer())
             .Add(new PolygonOverlayRenderer())
-            .Add(new ChineseTextOverlayRenderer());
+            .Add(new TextOverlayRenderer());
 
     public void Render(RgbImage image, AnalysisResult result)
     {

@@ -1,71 +1,28 @@
+using GlyphRaster;
 using ZlmSharp.Extra.Yolo;
 
 namespace ZlmSharp.Extra.Overlay;
 
 /// <summary>
-/// 在 RGB24 帧上画检测框和标签（纯托管、无字体/图形库依赖）。
-/// 字体是内置的 5×7 位图，只覆盖 0-9 / A-Z / 少量符号，小写会转成大写。
+/// 在 RGB24 帧上画检测框和标签（纯托管、无图形库依赖）。
+/// 文字统一交给 <see cref="GlyphRaster"/>（内置文泉驿微米黑）光栅化，
+/// 中文、拉丁字母、数字都能显示，字形按 (码点, 字号) 缓存。
 /// </summary>
 public static class FrameOverlay
 {
-    private const int GlyphWidth = 5;
-    private const int GlyphHeight = 7;
-    private const int GlyphSpacing = 1;
+    /// <summary>标签字号（em 高度）相对 <c>scale</c> 的基准值：scale=2 → 16px。</summary>
+    private const float LabelFontSize = 8f;
+
+    /// <summary>内置字体在首次绘制文字时才解压（避免只用矩形时也付解压代价）。</summary>
+    private static readonly Lazy<TextFont> LabelFont = new(
+        static () => TextFont.BuiltIn,
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static readonly (byte R, byte G, byte B)[] Palette =
     [
         (255, 64, 64), (64, 255, 64), (64, 128, 255), (255, 200, 0),
         (255, 64, 255), (0, 220, 220), (255, 128, 0), (180, 120, 255),
     ];
-
-    private static readonly Dictionary<char, byte[]> Glyphs = new()
-    {
-        ['0'] = [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
-        ['1'] = [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
-        ['2'] = [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
-        ['3'] = [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
-        ['4'] = [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
-        ['5'] = [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
-        ['6'] = [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
-        ['7'] = [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
-        ['8'] = [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
-        ['9'] = [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
-        ['A'] = [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-        ['B'] = [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
-        ['C'] = [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
-        ['D'] = [0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C],
-        ['E'] = [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
-        ['F'] = [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
-        ['G'] = [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F],
-        ['H'] = [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-        ['I'] = [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
-        ['J'] = [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
-        ['K'] = [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
-        ['L'] = [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
-        ['M'] = [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
-        ['N'] = [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
-        ['O'] = [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-        ['P'] = [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
-        ['Q'] = [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
-        ['R'] = [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
-        ['S'] = [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
-        ['T'] = [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-        ['U'] = [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-        ['V'] = [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
-        ['W'] = [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
-        ['X'] = [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
-        ['Y'] = [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
-        ['Z'] = [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
-        ['.'] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
-        [','] = [0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x08],
-        ['-'] = [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
-        ['_'] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
-        [':'] = [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00],
-        ['/'] = [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
-        ['%'] = [0x19, 0x1A, 0x02, 0x04, 0x08, 0x0B, 0x13],
-        ['#'] = [0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A],
-        [' '] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-    };
 
     /// <summary>按类别取一个稳定颜色。</summary>
     public static (byte R, byte G, byte B) ColorOf(int classId) =>
@@ -199,8 +156,12 @@ public static class FrameOverlay
         }
     }
 
-    /// <summary>在 (x, y) 处画一行文字；<paramref name="y"/> 是文字左上角（会放在框上方，贴边时落到框内）。</summary>
-    public static void DrawLabel(
+    /// <summary>
+    /// 在框左上角 (x, y) 处画一行标签：底色取 <paramref name="color"/>，文字为白色。
+    /// 标签默认放在框上方，贴边时落回框内左上角。<paramref name="scale"/> 控制字号（1..6）。
+    /// </summary>
+    /// <returns>占用的像素高度；文本为空时返回 0。</returns>
+    public static int DrawLabel(
         Span<byte> rgb,
         int width,
         int height,
@@ -211,60 +172,69 @@ public static class FrameOverlay
         (byte R, byte G, byte B) color,
         int scale = 2)
     {
-        if (text.Length == 0)
+        if (string.IsNullOrEmpty(text))
         {
-            return;
+            return 0;
         }
 
-        var padding = Math.Max(1, scale);
-        var textWidth = text.Length * ((GlyphWidth + GlyphSpacing) * scale) - (GlyphSpacing * scale);
-        var boxWidth = Math.Min(width, textWidth + (padding * 2));
-        var boxHeight = (GlyphHeight * scale) + (padding * 2);
+        scale = Math.Clamp(scale, 1, 6);
+        var layout = LabelFont.Value.Layout(text, LabelFontSize * scale);
+        var padding = Math.Max(2, scale);
 
-        var left = Math.Max(0, Math.Min(width - boxWidth, (int)MathF.Round(x)));
+        var boxWidth = Math.Min(width, (int)MathF.Ceiling(layout.Width) + (padding * 2));
+        var boxHeight = (int)MathF.Ceiling(layout.Height) + (padding * 2);
+
+        var left = Math.Clamp((int)MathF.Round(x), 0, Math.Max(0, width - boxWidth));
         var top = (int)MathF.Round(y) - boxHeight;
         if (top < 0)
         {
-            top = Math.Max(0, Math.Min(height - boxHeight, (int)MathF.Round(y)));
+            top = Math.Clamp((int)MathF.Round(y), 0, Math.Max(0, height - boxHeight));
         }
 
-        FillRect(rgb, width, height, stride, left, top, boxWidth, boxHeight, color);
+        return DrawText(rgb, width, height, stride, left, top, layout, color, padding);
+    }
 
-        var textTop = top + padding;
-        var textLeft = left + padding;
-        foreach (var character in text)
+    /// <summary>
+    /// 在 (x, y)（左上角）画一段带底色的白色文本，返回占用的像素高度。
+    /// 先铺底色再逐字形做 alpha 混合，画面外部分自动裁剪。
+    /// </summary>
+    public static int DrawText(
+        Span<byte> rgb,
+        int width,
+        int height,
+        int stride,
+        int x,
+        int y,
+        TextLayout layout,
+        (byte R, byte G, byte B) background,
+        int padding = 2)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var boxWidth = Math.Min(width, (int)MathF.Ceiling(layout.Width) + (padding * 2));
+        var boxHeight = Math.Min(height, (int)MathF.Ceiling(layout.Height) + (padding * 2));
+        if (boxWidth <= 0 || boxHeight <= 0)
         {
-            var key = char.ToUpperInvariant(character);
-            if (!Glyphs.TryGetValue(key, out var glyph))
-            {
-                textLeft += (GlyphWidth + GlyphSpacing) * scale;
-                continue;
-            }
-
-            for (var row = 0; row < GlyphHeight; row++)
-            {
-                var bits = glyph[row];
-                for (var column = 0; column < GlyphWidth; column++)
-                {
-                    if ((bits & (1 << (GlyphWidth - 1 - column))) == 0)
-                    {
-                        continue;
-                    }
-
-                    FillRect(
-                        rgb,
-                        width,
-                        height,
-                        stride,
-                        textLeft + (column * scale),
-                        textTop + (row * scale),
-                        scale,
-                        scale,
-                        (255, 255, 255));
-                }
-            }
-
-            textLeft += (GlyphWidth + GlyphSpacing) * scale;
+            return 0;
         }
+
+        var left = Math.Clamp(x, 0, Math.Max(0, width - boxWidth));
+        var top = Math.Clamp(y, 0, Math.Max(0, height - boxHeight));
+
+        FillRect(rgb, width, height, stride, left, top, boxWidth, boxHeight, background);
+        TextPainter.DrawRgb24(rgb, width, height, stride, layout, left + padding, top + padding, RgbColor.White);
+        return boxHeight;
+    }
+
+    /// <summary>用内置字体测量文本的像素尺寸（不含底色 padding）。</summary>
+    public static (float Width, float Height) MeasureText(string text, float fontSize)
+    {
+        if (string.IsNullOrEmpty(text) || fontSize <= 0f)
+        {
+            return (0f, 0f);
+        }
+
+        var layout = LabelFont.Value.Layout(text, fontSize);
+        return (layout.Width, layout.Height);
     }
 }

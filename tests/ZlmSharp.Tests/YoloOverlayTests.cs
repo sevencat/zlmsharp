@@ -104,9 +104,11 @@ public class YoloOverlayTests
         var color = FrameOverlay.ColorOf(0);
         AssertPixel(pixels, width, 10, 20, color);
         AssertPixel(pixels, width, 39, 20, color);
-        AssertPixel(pixels, width, 20, 30, (0, 0, 0));
 
-        // 标签从 y=20 向上放不下（标签高 18px），会落回框内，因此框内有白色字形
+        // 标签从 y=20 向上放不下（标签高约 20px），会落回框内；框外区域仍是黑色
+        AssertPixel(pixels, width, 2, 2, (0, 0, 0));
+
+        // 标签用内置字体渲染，框内有白色字形
         Assert.True(CountWhite(pixels) > 30);
     }
 
@@ -161,6 +163,33 @@ public class YoloOverlayTests
 
         // 画面最左、最右列都可能有像素，但不应越界（越界会抛异常）；顶部不能为负已由内部 clamp 保证
         Assert.Contains(pixels, value => value != 0);
+    }
+
+    [Fact]
+    public void DrawLabel_RendersChineseWithBuiltInFont()
+    {
+        var width = 160;
+        var height = 40;
+        var pixels = new byte[width * height * 3];
+
+        var drawn = FrameOverlay.DrawLabel(pixels, width, height, width * 3, 0, 38, "中文标签", (0, 0, 128));
+
+        Assert.True(drawn > 0);
+        // 内置字体能给出汉字字形，抗锯齿遮挡后仍有纯白像素
+        Assert.True(CountWhite(pixels) > 20);
+    }
+
+    [Fact]
+    public void MeasureText_ScalesWithTextAndSize()
+    {
+        var small = FrameOverlay.MeasureText("AB", 12f);
+        var large = FrameOverlay.MeasureText("AB", 24f);
+        var longer = FrameOverlay.MeasureText("ABCDEF", 12f);
+
+        Assert.True(small.Width > 0f && small.Height > 0f);
+        Assert.True(large.Width > small.Width);
+        Assert.True(longer.Width > small.Width);
+        Assert.Equal((0f, 0f), FrameOverlay.MeasureText(string.Empty, 12f));
     }
 
     [Fact]

@@ -139,7 +139,7 @@
 
 ### YOLO 结果叠加（M11）
 
-- `FrameOverlay`（纯托管绘制，无 System.Drawing/SkiaSharp 依赖）：在 RGB24 `Span<byte>` 上按 stride 画检测框 + 标签；内置 5×7 位图字体（0-9/A-Z/常用符号，小写转大写），按 `classId` 取 8 色稳定调色板；所有绘制都做边界裁剪，标签放不下时自动落回框内。
+- `FrameOverlay`（纯托管绘制，无 System.Drawing/SkiaSharp 依赖）：在 RGB24 `Span<byte>` 上按 stride 画检测框 + 标签；文字统一由 `GlyphRaster`（内置文泉驿微米黑，中英文/数字混排）光栅化，按 `classId` 取 8 色稳定调色板；所有绘制都做边界裁剪，标签放不下时自动落回框内。
 - `YoloOverlayManager` / `YoloOverlaySession`：每路叠加流起两个 ffmpeg 子进程——解码本地 HTTP-FLV（`-f rawvideo -pix_fmt rgb24`）→ C# 在每帧上画最近一次检测结果 → 编码（libx264/veryfast/zerolatency/yuv420p）推回本机 RTMP `{stream}_yolo`；宽高取源流 SPS 解析值并向下取偶（yuv420p 要求），帧率默认源帧率或 25。
 - 检测结果复用 `YoloResultStore` 的最近快照（默认 5s 内有效），不对每帧推理；`StreamYoloMonitor` 跳过 `*_yolo` 流，避免对叠加结果再检测形成回路。
 - API：`startYoloOverlay?vhost&app&stream&fps&bitrate&scale`、`stopYoloOverlay?vhost&app&stream`（返回 `data.flag`）、`getYoloOverlay`（返回 `state`/`frames`/`width`/`height`/`fps`/`error` 等）；起始要求源流在线且已有分辨率，`http.port`/`rtmp.port` 都必须开启。

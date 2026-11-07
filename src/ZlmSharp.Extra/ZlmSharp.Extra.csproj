@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
+    <!-- 纯托管 TrueType 文本光栅化：叠加画面里的标签/OCR 文本统一用它绘制 -->
+    <ProjectReference Include="..\GlyphRaster\GlyphRaster.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\simdyolo\src\SimdYolo\SimdYolo.csproj')">
@@ -31,11 +33,6 @@
     <!-- 纯托管 PP-OCRv6 推理（netstandard2.0 分支可在 net8 使用），模型随 NuGet 包内置 -->
     <PackageReference Include="Sdcb.SimdPaddleOCR" Version="2.0.0" />
     <PackageReference Include="Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny" Version="1.0.0" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- 内置 16×16 中文点阵字库（GB2312 全集 + ASCII），用于把 OCR 文本画进叠加画面 -->
-    <EmbeddedResource Include="Overlay\Fonts\hzk16.bin" />
   </ItemGroup>
 
 </Project>
