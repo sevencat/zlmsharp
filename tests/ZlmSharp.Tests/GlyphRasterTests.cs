@@ -354,6 +354,35 @@ public sealed class GlyphRasterTests
     }
 
     [Fact]
+    public void SharedBuiltInFontIsThreadSafe()
+    {
+        var font = TextFont.BuiltIn;
+        var expected = font.Layout("并发测试 ABC 123", 24f);
+        Assert.True(expected.Glyphs.Count > 0);
+
+        var errors = 0;
+        System.Threading.Tasks.Parallel.For(0, 4, _ =>
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                var layout = font.Layout("并发测试 ABC 123", 24f);
+                if (layout.Glyphs.Count != expected.Glyphs.Count || layout.Width != expected.Width)
+                {
+                    System.Threading.Interlocked.Increment(ref errors);
+                }
+            }
+        });
+
+        Assert.Equal(0, errors);
+        Assert.Same(font, TextFont.BuiltIn);
+
+        var a = font.GetGlyphMask('国', 32f);
+        var b = font.GetGlyphMask('国', 32f);
+        Assert.Equal(a.Width, b.Width);
+        Assert.True(a.Coverage.SequenceEqual(b.Coverage));
+    }
+
+    [Fact]
     public void BuiltInFontRendersSameAsExternalFile()
     {
         if (ChineseFont is null)

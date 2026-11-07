@@ -8,6 +8,9 @@
       不依赖 FreeType / Skia / System.Drawing / GDI+，NativeAOT 与裁剪安全。
     -->
     <AssemblyName>GlyphRaster</AssemblyName>
+    <PackageId>Sevencat.GlyphRaster</PackageId>
+    <Authors>sevencat</Authors>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
