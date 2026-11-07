@@ -1,0 +1,11 @@
+WenQuanYi Micro Hei (文泉驿微米黑)
+==================================
+
+File      : WenQuanYiMicroHei.ttf.gz
+Source    : https://raw.githubusercontent.com/vpisarev/opencv_3rdparty/cc7d85179d69a704bee209aa37ce8a657f2f8b34/WenQuanYiMicroHei.ttf.gz
+            OpenCV 5 在 WITH_UNIFONT 时下载的同一文件。
+MD5 (gz)  : fb79cf5b4f4c89414f1233f14c2eb273
+License   : Apache License 2.0 / GPL v3 双许可（含字体嵌入例外）
+Homepage  : http://wenq.org/
+
+该字体仅作为嵌入资源随 GlyphRaster 一起分发，文件内容未做任何修改。

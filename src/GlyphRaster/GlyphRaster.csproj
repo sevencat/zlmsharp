@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>GlyphRaster</RootNamespace>
+    <!--
+      纯托管 TrueType 文本渲染：自己解析 sfnt（cmap/loca/glyf/hmtx），
+      把二次贝塞尔轮廓扫成 A8 覆盖位图，再混到 RGB24 / BGRA32 缓冲上。
+      不依赖 FreeType / Skia / System.Drawing / GDI+，NativeAOT 与裁剪安全。
+    -->
+    <AssemblyName>GlyphRaster</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ZlmSharp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 内置中日韩字体：文泉驿微米黑，与 OpenCV 5 的 WITH_UNIFONT 是同一个文件（gzip 2.0 MB / 原始 TTF 4.35 MB） -->
+    <EmbeddedResource Include="Fonts\WenQuanYiMicroHei.ttf.gz"
+                      LogicalName="GlyphRaster.Fonts.WenQuanYiMicroHei.ttf.gz" />
+  </ItemGroup>
+
+</Project>
