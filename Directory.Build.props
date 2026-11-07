@@ -8,7 +8,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <Version>0.1.0</Version>
+    <!-- 全仓唯一版本号：程序集版本、CLI -v 输出、NuGet 包版本都取自这里 -->
+    <Version>0.1.5</Version>
     <NeutralLanguage>zh-CN</NeutralLanguage>
 
     <!-- NativeAOT / 裁剪：全仓库开启分析器，AOT publish 必须 0 warning -->
