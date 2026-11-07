@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ZlmSharp.Cli.Libav</RootNamespace>
+    <AssemblyName>zlmsharp-libav</AssemblyName>
+
+    <!-- 与 ZlmSharp.Cli 的 AOT 发布不同：FFmpeg.AutoGen 依赖动态符号加载，这里先走 JIT -->
+    <PublishAot>false</PublishAot>
+    <ApplicationIcon>..\..\assets\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!-- 复用 CLI 宿主逻辑（参数解析/配置加载/日志/端口绑定），只替换媒体实现 -->
+  <ItemGroup>
+    <Compile Include="..\ZlmSharp.Cli\CliApplication.cs" Link="Hosting\CliApplication.cs" />
+    <Compile Include="..\ZlmSharp.Cli\CliArguments.cs" Link="Hosting\CliArguments.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Extra\ZlmSharp.Extra.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Media.AutoGen\ZlmSharp.Media.AutoGen.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\ZlmSharp.Cli\.env')">
+    <None Include="..\ZlmSharp.Cli\.env" Link=".env">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

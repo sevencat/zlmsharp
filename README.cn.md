@@ -54,7 +54,354 @@ ffplay http://127.0.0.1:8080/live/test.live.flv      # HTTP-FLV
 
 HTTP-FLV / WS-FLV / RTSP 的路径支持 `[vhost/]app/stream`（vhost 段可省略）；RTMP 在 `connect` 里只带 `app/stream`，流标识默认落在 `__defaultVhost__`。
 
+### 使用 ffmpeg dll（进程内 libav）
+
+默认的 `zlmsharp.exe` 每次取帧/转码都起一个 `ffmpeg.exe` 子进程。要走 **FFmpeg.AutoGen 8.x + ffmpeg dll**、在进程内直接解码/编码（不起子进程、不走管道），需要换宿主：用 `zlmsharp-libav.exe`。
+
+- 只有 `zlmsharp-libav.exe` 能用 dll；`zlmsharp.exe` 是 NativeAOT 构建，不含 FFmpeg.AutoGen，不能切换。
+- 业务代码完全一致：参数、`zlmsharp.ini`、`.env`、日志、端口、API、AI 分析都不变，只换媒体实现。
+
+#### 1. 准备 dll
+
+把 ffmpeg **8.x 的 shared 构建**（与本仓库 `FFmpeg.AutoGen 8.1.0` 对应）里的这些 dll 与 `ffmpeg.exe` 放在**同一目录**：
+
+```
+avcodec-62.dll  avformat-62.dll  avutil-60.dll  avfilter-11.dll
+avdevice-62.dll swscale-9.dll    swresample-6.dll
+```
+
+实测最小集合是前五个（`avcodec` / `avformat` / `avutil` / `swscale` / `swresample`），抓帧、解码、libx264 推流都够用；`avfilter` / `avdevice` 当前流程不调用，留空也行，嫌麻烦就把整个 shared 构建目录（含 exe）一起拷。要求 **x64 且与进程位数一致**；官方 shared 构建还依赖 MSVC 运行时（`vcruntime140.dll` 等，装 VC++ Redistributable 即可）。
+
+#### 2. 配置 dll 目录
+
+程序取 `ZLM_FFMPEG_BIN` 的**所在目录**作为 dll 目录，所以三种写法任选：
+
+```dotenv
+# .env —— 推荐：写绝对路径，两个宿主共用同一份 .env
+# exe 版直接把它当 ffmpeg.exe；libav 版只取它的目录
+ZLM_FFMPEG_BIN=E:\program\ffmpeg\81\ffmpeg.exe
+```
+
+```dotenv
+# 也可以直接写目录（仅 libav 版认这种写法，exe 版会启动失败）
+ZLM_FFMPEG_BIN=E:\program\ffmpeg\81
+```
+
+- 进程环境变量优先于 `.env`：`$env:ZLM_FFMPEG_BIN='E:\program\ffmpeg\81\ffmpeg.exe'` 可以临时覆盖。
+- 相对路径按**当前工作目录**解析（不是 exe 目录），所以一定写绝对路径。
+- 留空时 dll 目录退化为当前工作目录：`dotnet run` 从仓库根启动、或从别处启动 exe 都会找不到 dll，**不要依赖空值**。
+- 编程式（自己写宿主 / 嵌入式）可直接指定，跳过 `.env`：
+
+```csharp
+// 方式 A：显式指定 ffmpeg.exe 路径或 dll 目录（内部即 Replace 掉默认的 FfmpegToolkit）
+builder.Services.AddAutoGenMediaToolkit(@"E:\program\ffmpeg\81");
+
+// 方式 B：嵌入式宿主里，先用默认实现注册，再整体替换
+builder.Services.AddZlmSharp(options => options.RegisterStreamListeners = true);
+builder.Services.AddZlmSharpExtra();
+builder.Services.AddAutoGenMediaToolkit();
+```
+
+（本仓库的 `zlmsharp-libav` 走的是 `CliApplication.ConfigureMedia`，那是 `internal` 扩展点，只有像它那样把 `CliApplication.cs` 链接进来的项目才用得到。）
+
+#### 3. 启动
+
+```bash
+dotnet run --project src/ZlmSharp.Cli.Libav        # 开发
+dotnet publish src/ZlmSharp.Cli.Libav -c Release   # 发布（JIT，不能 AOT）
+# 产物 zlmsharp-libav.exe，配置/参数与 zlmsharp.exe 完全相同
+```
+
+`.env` 会从 `src/ZlmSharp.Cli/.env` 复制到输出目录（csproj 里的 `None Include`），所以改那一份即可对两个宿主同时生效；发布后也可直接改 exe 同目录的 `.env`。
+
+#### 4. 确认生效
+
+1. 起流后调用一次取帧或叠加（如 `startOverlay`、`analyzeDetect?analyzer=ocr`）。
+2. `Get-Process ffmpeg -ErrorAction SilentlyContinue` 应为空；同时叠加推流、抓图、录像一切正常，就说明走的是 dll。
+3. dll 目录不对时，第一次用到媒体会抛 `加载 ffmpeg dll 失败（目录 …）`，日志里能看到具体目录。
+
+#### 5. 两版差异
+
+| 项 | `zlmsharp.exe`（默认） | `zlmsharp-libav.exe`（dll） |
+| --- | --- | --- |
+| 媒体进程 | 每路抓帧/转码一个 `ffmpeg.exe` | 无子进程，dll 在进程内 |
+| 依赖 | PATH 或 `ZLM_FFMPEG_BIN` 指向的 `ffmpeg.exe` | 同目录的 ffmpeg 8.x dll |
+| 发布 | NativeAOT，单文件 | JIT，需要 .NET 运行时与 dll |
+| `FfprobePath` | 配置值（但当前没有流程调用） | 恒为空 |
+| 退出码 | 由 ffmpeg 子进程给出 | 由编码线程给出 |
+| 行为 | 抓单帧、常驻采样、顺序解码、libx264 叠加推流 | 完全对齐 |
+
+`samples` 与 `tests` 仍使用默认的 exe 实现。
+
+## zlmsharp.exe：媒体实现、命令行与完整配置
+
+### 用的哪套实现、哪个版本
+
+`src/ZlmSharp.Cli`（产物 `zlmsharp.exe`）是默认宿主，当前版本 **0.1.4**（`-v` 输出 `zlmsharp 0.1.4 (build ..., 分支/提交)`；版本号定义在 `Directory.Build.props` 的 `Version`，以 `-v` 实际输出为准）。
+
+媒体能力全部收在 `IMediaToolkit` 之后，默认实现是 `FfmpegToolkit`：
+
+- **子进程 + 管道**：每次抓单帧 / 常驻采样 / 顺序解码 / 叠加推流都 `Process.Start` 一个 `ffmpeg.exe`，用 stdin/stdout 传 PPM 或 RGB24 裸帧。进程内不加载任何 ffmpeg dll，也不引用 FFmpeg.AutoGen。
+- **ffmpeg.exe 版本**：代码不做版本校验，只用 `-f image2pipe -vcodec ppm`（抓帧）、`-f rawvideo -pix_fmt rgb24`（解码）、`libx264` + `-f flv`（叠加推流）等基础能力；ffmpeg 4.x ~ 8.x 的官方构建都带，本仓库实测为 **8.x**（例如 `E:\program\ffmpeg\81\ffmpeg.exe`）。自编译 ffmpeg 时务必保留 libx264 与 ppm / rawvideo / flv。
+- **ffprobe**：`ZLM_FFPROBE_BIN` 会被解析进 `IMediaToolkit.FfprobePath`，但当前版本没有任何流程调用它，可以不装。
+- **进程内版本**：`src/ZlmSharp.Cli.Libav`（`zlmsharp-libav.exe`）用 FFmpeg.AutoGen 8.1.0 + ffmpeg 8.x dll 在进程内做同样的事，dll 的放置与 `ZLM_FFMPEG_BIN` 配置见上文「使用 ffmpeg dll（进程内 libav）」。两者只共享上层逻辑，媒体实现互不依赖。
+
+上层（RTSP / RTMP / HTTP-FLV / 录制 / AI 分析）只依赖 `IMediaToolkit` 接口，注册自己的实现即可整体替换：
+
+```csharp
+builder.Services.AddSingleton<IMediaToolkit>(provider =>
+    new MyToolkit(provider.GetRequiredService<AppOptions>().Env));
+```
+
+### 命令行与退出码
+
+```bash
+zlmsharp                                    # 读 exe 同目录的 zlmsharp.ini + .env
+zlmsharp -c ./conf/zlmsharp.ini -e ./conf/.env
+zlmsharp -v                                 # 版本 + 构建时间 + 分支/提交
+zlmsharp -h                                 # 用法
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `-c`, `--conf <path>` | 指定 `zlmsharp.ini`。**指定的文件不存在会直接报错退出**（不会自动生成） |
+| `-e`, `--env <path>` | 指定 `.env`，规则同上 |
+| `-d`, `--daemon` | 仅为兼容 ZLM 运维脚本保留；当前仍前台运行，只打一条日志 |
+| `-v`, `--version` | 打印版本后退出 |
+| `-h`, `--help`, `-?` | 打印用法后退出 |
+| 未知参数 | 打印错误 + 用法，退出码 2 |
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 正常退出（收到 Ctrl+C / SIGTERM） |
+| 1 | 配置加载失败、宿主初始化失败、运行期异常 |
+| 2 | 命令行参数错误 |
+| 3 | HTTP 端口无法监听（被占用，或 Windows 非管理员绑定 <1024） |
+
+### 首次启动与路径规则
+
+首次启动会在 exe 同目录（`AppContext.BaseDirectory`，即 `bin/Debug/net8.0/` 或发布目录）生成两个文件，并打印生成提示：
+
+- `zlmsharp.ini`：业务配置，见下方完整表格；注释与默认值就是内置模板。
+- `.env`：机器相关 / 敏感 / 外部工具路径（ffmpeg、模型、录像根目录）。
+
+ini 里所有相对路径（`./www`、`./log`、`./WebUI`、`./www/snap/`）都相对 **exe 目录**，不是当前工作目录；用 `-c` 把配置放到别处也不会改变这一点。
+
+### 配置优先级与语法
+
+```
+进程环境变量  >  .env  >  zlmsharp.ini  >  内置默认值
+```
+
+- ini 以 **内置默认值为基底**再做覆盖，所以升级新增的键不会缺省；无法识别的键直接忽略，取值越界会被钳制/重置并打启动警告（例如 `[http] port=70000`）。
+- 支持 `[section]`、`key=value`、整行 `;` / `#` 注释；同名键后者生效；键名大小写不敏感。
+- 布尔值写 `0/1`（也接受 `true/false`、`on/off`、`yes/no`）。
+- 端口写 `0` 表示 **不监听该协议**（HTTP 为 0 时只跑 RTSP/RTMP）。
+- `getServerConfig` / `setServerConfig` 能读写的键以 `ConfigSchema` 白名单为准；下表标注「仅 ini」的项只能用文件配置（如 `api.pageToken`）。
+
+### `[api]`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `apiDebug` | `0` | 打印每次 HTTP API 请求与回复 |
+| `secret` | `035c73f7-...` | 敏感接口的 `secret` 参数；来自 `127.0.0.1` / `::1` 的请求免校验，清空该键则关闭校验 |
+| `pageToken` | 空（仅 ini） | 管理页面 `/zlm/admin` 的访问令牌，见「管理页面鉴权」 |
+| `snapRoot` | `./www/snap/` | 截图根目录（预留） |
+| `defaultSnap` | `./www/logo.png` | 默认截图文件（预留） |
+| `downloadRoot` | `./www` | `downloadFile` 可访问的根目录 |
+
+### `[general]`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enableVhost` | `0` | 是否启用虚拟主机；开启后流标识带 vhost |
+| `flowThreshold` | `1024` | 触发流量统计事件的阈值（KB） |
+| `maxStreamWaitMS` | `15000` | 播放端等待流注册的最长时间（毫秒） |
+| `streamNoneReaderDelayMS` | `20000` | 无人观看多久后关闭流（毫秒），配合 `protocol.auto_close` / hook |
+| `resetWhenRePlay` | `1` | 无人观看后重新推流时是否重置时间戳 |
+| `mergeWriteMS` | `0` | 合并写毫秒（0=不合并） |
+| `gop_cache_ms` | `0` | 新观众补发 GOP 的时间窗口（毫秒）；0=完整 GOP（秒开，延迟≈相机 GOP），设 1000 之类可降延迟 |
+| `catch_up_pending_frames` | `0` | 播放端积压超过该帧数就丢积压跳到最近关键帧（追赶实时）；0=关闭，建议 150~300 |
+| `mediaServerId` | `your_server_id` | 媒体服务器 id |
+| `listen_ip` | `::` | 监听地址，多个用逗号分隔；`::` / `0.0.0.0` 表示全部 |
+| `wait_track_ready_ms` | `10000` | 等待 track ready 的超时（毫秒） |
+| `wait_audio_track_data_ms` | `1000` | 等待首个音频数据的超时（毫秒） |
+| `wait_add_track_ms` | `3000` | 等待 addTrack 完成的超时（毫秒） |
+| `unready_frame_cache` | `100` | 未就绪阶段缓存的帧数 |
+| `broadcast_player_count_changed` | `0` | 是否广播观众数变化 |
+
+### `[http]`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `port` | `8080` | HTTP/API 与 HTTP-FLV 端口；`0`=不监听。ZLM 默认 80，这里改成 8080 以免 Windows 非管理员无法绑定 |
+| `sslport` | `443` | HTTPS 端口（预留） |
+| `rootPath` | `./WebUI` | 静态站点目录（管理页面是内嵌的，不依赖它） |
+| `charSet` | `utf-8` | 默认字符集 |
+| `keepAliveSecond` | `30` | HTTP keep-alive 超时（秒） |
+| `maxReqSize` | `40960` | 请求头大小上限（字节） |
+| `maxUploadSize` | `1073741824` | 上传体上限（字节，默认 1 GiB） |
+| `sendBufSize` | `65536` | socket 发送缓冲（字节） |
+| `dirMenu` | `1` | 是否允许目录浏览 |
+| `virtualPath` | 空 | 虚拟目录前缀 |
+| `forbidCacheSuffix` | 空 | 禁止缓存的后缀列表 |
+| `allow_origins` | `*` | 跨域允许来源 |
+| `allow_ip_range` | 内网段列表（见下） | 允许访问的 IP/网段，支持 `a-b` 区间写法；默认值为 `::1,127.0.0.1,172.16.0.0-172.31.255.255,192.168.0.0-192.168.255.255,10.0.0.0-10.255.255.255`，留空表示不限制 |
+| `forwarded_ip_header` | 空 | 从哪个请求头取真实 IP（反代场景） |
+
+### `[rtsp]`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `port` | `554` | RTSP 端口；`0`=不启用；非管理员改 `8554` |
+| `sslport` | `0` | RTSPS 端口（0=关闭） |
+| `authBasic` | `0` | 是否启用 Basic 鉴权 |
+| `directProxy` | `1` | 拉流代理是否直接透传（不转码） |
+| `handshakeSecond` | `15` | 握手超时（秒） |
+| `keepAliveSecond` | `15` | 保活超时（秒） |
+| `lowLatency` | `0` | 低延迟模式 |
+| `rtpTransportType` | `-1` | RTP 传输：-1 自动、0 UDP、1 TCP |
+
+### `[rtmp]`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `port` | `1935` | RTMP 端口；`0`=不启用 |
+| `sslport` | `0` | RTMPS 端口（0=关闭） |
+| `directProxy` | `1` | 拉流代理是否直接透传 |
+| `handshakeSecond` | `15` | 握手超时（秒） |
+| `keepAliveSecond` | `15` | 保活超时（秒） |
+| `enhanced` | `1` | 是否支持 Enhanced RTMP（HEVC 的 `codecId=12`/`hvc1` 两种 FLV 头） |
+
+### `[protocol]`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `modify_stamp` | `2` | 时间戳覆盖模式：0 不改、1 改首帧、2 全部重算 |
+| `enable_audio` | `1` | 转协议输出是否带音频 |
+| `add_mute_audio` | `1` | 只有视频时是否补静音 AAC，保证播放器兼容 |
+| `auto_close` | `0` | 无人观看是否直接关流（关闭时走 `streamNoneReaderDelayMS`） |
+| `continue_push_ms` | `15000` | 断流续推保护时间（毫秒），短暂断开不立即关流 |
+| `paced_sender_ms` | `0` | 平滑发送间隔（毫秒，0=关闭） |
+| `enable_hls` | `0` | 是否生成 HLS |
+| `enable_hls_fmp4` | `0` | 是否生成 HLS-fMP4 |
+| `enable_mp4` | `0` | 是否录制 MP4 |
+| `enable_flv_record` | `0` | 是否同时录 FLV 原始档（MP4 为正式录像） |
+| `enable_rtsp` | `1` | 是否生成 RTSP 输出 |
+| `enable_rtmp` | `1` | 是否生成 RTMP/FLV 输出 |
+| `enable_ts` | `0` | 是否生成 TS |
+| `enable_fmp4` | `0` | 是否生成 fMP4 |
+| `hls_demand` / `rtsp_demand` / `rtmp_demand` / `ts_demand` / `fmp4_demand` | `0` | 按需生成：有人看才转该协议 |
+| `mp4_max_second` | `3600` | MP4 单文件最长秒数，超过自动切片 |
+| `mp4_save_path` | `./www` | 录像保存根目录（可用 `ZLM_RECORD_ROOT` 覆盖） |
+| `hls_save_path` | `./www` | HLS 输出目录 |
+
+### `[proxy]`（拉流代理）
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enable` | `0` | 是否启用启动列表 |
+| `max_concurrency` | `16` | 并发拉流上限（钳制 1~256） |
+| `retry_delay_ms` | `2000` | 断线重连间隔（毫秒，钳制 200~60000） |
+| `list` | 空 | 启动即拉：`app/stream=url`，多项 `;` 分隔，支持 `rtmp://` / `rtsp://` |
+| `keep_on_none_reader` | `0`（模板未含此键，需手工加） | 启动列表里的代理是否常驻（没人看也不回收）；也可用 `addStreamProxy?keep=1` 按单路指定 |
+| `on_demand_list` | 空 | 按需拉流列表：有人点播才连源站 |
+| `on_demand_idle_ms` | `10000` | 最后一个观众离开后保持多久再停（毫秒，反抖动） |
+| `on_demand_max_wait_ms` | `30000` | 启动后多久仍无观众就停（毫秒），应大于 `maxStreamWaitMS` |
+
+### `[hls]`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `seg_duration` | `5` | 单切片秒数（按关键帧对齐，钳制 1~60） |
+| `seg_num` | `5` | 播放列表保留片数（钳制 2~100） |
+
+### `[hook]`（媒体事件回调）
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enable` | `0` | 是否启用 |
+| `on_publish` | 空 | 推流前鉴权：POST JSON，返回 `{"code":0}` 放行 |
+| `on_play` | 空 | 播放前鉴权，规则同上 |
+| `on_stream_none_reader` | 空 | 无人观看时回调，返回 0 表示允许关流 |
+| `timeoutSec` | `10` | 单次请求超时（秒） |
+| `retry` | `0` | 失败重试次数 |
+| `retry_delay` | `1000` | 重试间隔（毫秒） |
+| `fail_open` | `0` | hook 不可用（超时/网络错误）时是否放行；默认拒绝，避免鉴权被绕过 |
+
+### `[log]`（zlmsharp 扩展段）
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `level` | `2` | 0 trace、1 debug、2 info、3 warn、4 error、5 critical、6 off；越界重置为 2 |
+| `console` | `1` | 是否输出到控制台 |
+| `file` | `./log/zlmsharp.log` | 日志文件；置空则不写文件 |
+| `maxFileSizeMB` | `20` | 单文件上限（MB） |
+| `maxFiles` | `5` | 保留文件数 |
+
+### `.env` 全部键
+
+`.env` 放机器相关 / 敏感 / 外部工具路径；键名大小写不敏感，支持 `#` 注释、`export` 前缀、单双引号与 `${NAME}` 引用。**进程环境变量优先于文件值**，文件里的值会被注入进程环境（ffmpeg 子进程也能读到）。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `ZLM_FFMPEG_BIN` | 空（用 PATH 里的 `ffmpeg`） | ffmpeg.exe 绝对路径；`zlmsharp-libav` 取它的**所在目录**作为 dll 目录（也可直接写目录，仅 libav 版认）。明细见「使用 ffmpeg dll（进程内 libav）」 |
+| `ZLM_FFPROBE_BIN` | 空（用 PATH 里的 `ffprobe`） | 当前版本不调用，可不配 |
+| `ZLM_RECORD_ROOT` | 空（用 `protocol.mp4_save_path`） | 录像根目录，覆盖 ini |
+| `ZLM_EXTRA_ENABLE` | `1` | AI 分析扩展总开关：0=关闭定时分析与叠加（单图分析接口仍可用） |
+| `ZLM_ANALYSIS_SAMPLE_INTERVAL_MS` | 未配置时取 `ZLM_YOLO_SAMPLE_INTERVAL_MS`（1000） | 分析调度全局采样间隔（毫秒） |
+| `ZLM_ANALYSIS_ENABLED` | 空=全部已注册分析器 | 分析器白名单，逗号分隔，如 `yolo,ocr` |
+| `ZLM_ANALYSIS_BUSY_POLICY` | `skip` | 分析器忙时：`skip` 跳过本轮（不积压）、`queue` 排队（延迟会累积） |
+| `ZLM_YOLO_MODEL_DIR` | 空 | 模型目录；`ZLM_YOLO_MODEL` 只写文件名时在此查找 |
+| `ZLM_YOLO_MODEL` | 空=关闭 YOLO | 模型路径（`.pt`/`.onnx`）；相对路径按 exe 目录解析 |
+| `ZLM_YOLO_ENDPOINT` | 空 | 预留：外部推理服务地址（当前走本地 SimdYolo） |
+| `ZLM_YOLO_DEVICE` | `cpu` | 推理设备：`cpu` / `vulkan` / `metal` / `auto` |
+| `ZLM_YOLO_CONFIDENCE` | `0.25` | 置信度阈值（0~1） |
+| `ZLM_YOLO_INPUT_WIDTH` / `ZLM_YOLO_INPUT_HEIGHT` | `640` / `640` | 模型输入尺寸（`.pt` 要求 32 的倍数） |
+| `ZLM_YOLO_CPU_THREADS` | `0` | CPU 推理线程上限，0=库默认 |
+| `ZLM_YOLO_SAMPLE_INTERVAL_MS` | `1000` | 同一路流两次检测的最小间隔（毫秒），0=不限速 |
+| `ZLM_OCR_ENABLE` | `0` | OCR 分析开关（CPU 占用明显，默认关） |
+| `ZLM_OCR_MODEL` | `tiny` | 内置模型（PP-OCRv6 tiny，随包内置）；自定义模型齐全时忽略 |
+| `ZLM_OCR_DET_MODEL` / `ZLM_OCR_REC_MODEL` / `ZLM_OCR_DICT` | 空 | 自定义检测/识别模型与字典，三者齐全时优先于内置模型 |
+| `ZLM_OCR_CLS_MODEL` | 空 | 可选方向分类模型 |
+| `ZLM_OCR_MIN_SCORE` | `0.3` | 识别分数下限（0~1），低于该值的文本行丢弃 |
+| `ZLM_OCR_USE_CLS` | `1` | 是否用方向分类模型纠正倒置文本 |
+| `ZLM_OCR_LINE_WORKERS` | `1` | 文本行并行识别线程数（钳制 1~64） |
+| `ZLM_OCR_SAMPLE_INTERVAL_MS` | `2000` | 同一路流两次 OCR 的最小间隔（毫秒） |
+| `ZLM_OVERLAY_SUFFIX` | `_ai` | 叠加派生流后缀（`live/test` → `live/test_ai`） |
+| `ZLM_OVERLAY_FRAME_POLICY` | `reuse` | 叠加取结果：`reuse` 每帧都用最近结果（不跳帧，标注可能滞后）、`skip` 只用新鲜结果 |
+| `ZLM_OVERLAY_RESULT_MAX_AGE_MS` | `0` | 分析结果可复用时长（毫秒）；0=按策略默认（reuse 5000 / skip 200） |
+
+### 最小可用配置示例
+
+```ini
+[general]
+mediaServerId=demo-01
+listen_ip=0.0.0.0
+[http]
+port=8080
+[rtsp]
+port=8554          ; 非管理员也能绑
+[rtmp]
+port=1935
+[protocol]
+enable_audio=1
+add_mute_audio=1
+[log]
+level=2
+console=1
+file=./log/zlmsharp.log
+```
+
+```dotenv
+# .env：只写机器相关项，业务配置仍留在 ini
+ZLM_FFMPEG_BIN=E:\program\ffmpeg\81\ffmpeg.exe
+ZLM_RECORD_ROOT=D:\records
+```
+
 ## 配置
+
+每一项的含义、默认值、合法取值与 `.env` 全量清单都在上文「zlmsharp.exe：媒体实现、命令行与完整配置」里；这里只讲两个文件的生成与加载规则。
 
 两个文件都可选，首次启动自动生成：
 
@@ -207,7 +554,9 @@ src/ZlmSharp/           类库（程序集 ZlmSharp.MediaServer，命名空间�
   Core/ Codecs/ Configuration/ Protocols/{Flv,Rtmp,Rtsp}/ Http/ Recording/ Api/ Server/
   Ai/                    AI 契约（IStreamAnalyzer / IOverlayController / 结果模型）与顶层调用
 src/ZlmSharp.Extra/     AI 实现（程序集 ZlmSharp.Extra）：ffmpeg 取帧、YOLO、叠加管线、分析调度
+src/ZlmSharp.Media.AutoGen/ 可选媒体实现（FFmpeg.AutoGen 8.x）：进程内调 ffmpeg dll，不起 ffmpeg.exe
 src/ZlmSharp.Cli/       可执行入口（产物 zlmsharp.exe，NativeAOT）
+src/ZlmSharp.Cli.Libav/ 可执行入口（产物 zlmsharp-libav.exe，媒体实现为进程内 dll，JIT）
 samples/…Sample.Web/    嵌入示例（未接 Extra，AI 端点按“未启用”降级）
 tests/ZlmSharp.Tests/   xUnit 单元 + 端到端测试
 assets/                 app.ico（多尺寸）与 app-icon.png，由 tools/make-icon.ps1 生成

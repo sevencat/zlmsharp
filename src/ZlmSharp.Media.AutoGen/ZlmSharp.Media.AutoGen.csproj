@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ZlmSharp.Media.AutoGen</RootNamespace>
+    <!-- 进程内调用 libav（ffmpeg 8.x dll），直接操作非托管指针 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- FFmpeg.AutoGen 内部用反射/委托加载符号，不做 AOT 兼容性分析 -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZlmSharp\ZlmSharp.csproj" />
+    <ProjectReference Include="..\ZlmSharp.Extra\ZlmSharp.Extra.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 8.1.0 ↔ FFmpeg 8.x（avcodec-62 / avformat-62 / avutil-60 / swscale-9） -->
+    <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
+  </ItemGroup>
+
+</Project>

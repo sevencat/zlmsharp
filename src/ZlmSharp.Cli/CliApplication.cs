@@ -12,6 +12,12 @@ namespace ZlmSharp.Cli;
 
 internal static class CliApplication
 {
+    /// <summary>
+    /// 媒体实现扩展点：默认走 ffmpeg.exe 子进程；替换成进程内 libav 的宿主可在此注册
+    /// （见 <c>ZlmSharp.Cli.Libav</c>）。
+    /// </summary>
+    internal static Action<IServiceCollection>? ConfigureMedia { get; set; }
+
     public static async Task<int> RunAsync(string[] args)
     {
         TrySetUtf8Console();
@@ -129,6 +135,9 @@ internal static class CliApplication
 
         // AI 分析/叠加的可选实现包：默认接入内置 YOLO；ZLM_EXTRA_ENABLE=0 可整体关闭
         builder.Services.AddZlmSharpExtra();
+
+        // 媒体实现覆盖点（默认 ffmpeg.exe；进程内 libav 宿主在此替换 IMediaToolkit）
+        ConfigureMedia?.Invoke(builder.Services);
 
         ZlmSharpKestrel.Configure(builder, config.Options);
 
