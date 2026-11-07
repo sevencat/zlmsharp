@@ -3,33 +3,46 @@
     构建管理页面单文件，并回写到后端可部署的位置。
 
 .DESCRIPTION
-    1. 在 web/ 里装依赖（有 package-lock.json 用 npm ci，否则 npm install）
-    2. vite build + vite-plugin-singlefile → web/dist/index.html（单个自包含 html）
-    3. postbuild.mjs 把它复制到 src/ZlmSharp/WebUI/index.html，并预生成 .br / .gz
-    4. .NET 构建/发布时，这些文件会被拷到输出目录的 www/ 下（见 ZlmSharp.csproj）
+    1. 在 web/（Buefy 版）或 web-quasar/（Quasar 版）里装依赖
+       （有 package-lock.json 用 npm ci，否则 npm install）
+    2. vite build + vite-plugin-singlefile → {工程}/dist/index.html（单个自包含 html）
+    3. postbuild.mjs 把它 gzip 成 src/ZlmSharp/WebUI/index.html.gz
+    4. .NET 构建/发布时，这个文件会被拷到输出目录的 www/ 下（见 ZlmSharp.csproj）
+
+    两套页面共用同一个部署位置，构建哪个就把哪个放到线上。
+
+.PARAMETER Frontend
+    选择前端工程：buefy（web/，默认）或 quasar（web-quasar/）
 
 .PARAMETER SkipInstall
     跳过 npm install（依赖已就绪时加快重复构建）
 
 .EXAMPLE
     pwsh scripts/build-web.ps1
-    pwsh scripts/build-web.ps1 -SkipInstall
+    pwsh scripts/build-web.ps1 -Frontend quasar -SkipInstall
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [ValidateSet('buefy', 'quasar')]
+    [string]$Frontend = 'buefy'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$webRoot = Join-Path $repoRoot 'web'
+if ($Frontend -eq 'quasar') {
+    $webRoot = Join-Path $repoRoot 'web-quasar'
+}
+else {
+    $webRoot = Join-Path $repoRoot 'web'
+}
 
 if (-not (Test-Path $webRoot)) {
     throw "找不到前端工程目录：$webRoot"
 }
 
-# 品牌图标：assets/app-icon.png（512x512）→ web/src/assets/app-icon.png（128x128，内联用）
+# 品牌图标：assets/app-icon.png（512x512）→ {工程}/src/assets/app-icon.png（128x128，内联用）
 # 只在源图更新过时才重新生成，避免每次构建都做一次图像缩放。
 $sourceIcon = Join-Path $repoRoot 'assets/app-icon.png'
 $derivedIcon = Join-Path $webRoot 'src/assets/app-icon.png'

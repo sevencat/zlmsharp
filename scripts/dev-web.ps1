@@ -3,25 +3,37 @@
     启动管理页面的前端开发服务器（带后端代理）。
 
 .DESCRIPTION
-    vite dev server 默认监听 5173，把 /index/api/* 与 /live/* 代理到后端，
+    vite dev server 把 /index/api/* 与 /live/* 代理到后端，
     这样开发时不需要每次都重新打包单文件。
+    端口：buefy 版 5173，quasar 版 5174。
 
 .PARAMETER Backend
     后端地址，缺省 http://127.0.0.1:8080（zlmsharp.ini 里 http.port 的缺省值）
 
+.PARAMETER Frontend
+    选择前端工程：buefy（web/，默认）或 quasar（web-quasar/）
+
 .EXAMPLE
     pwsh scripts/dev-web.ps1
     pwsh scripts/dev-web.ps1 -Backend http://192.168.1.10:8080
+    pwsh scripts/dev-web.ps1 -Frontend quasar
 #>
 [CmdletBinding()]
 param(
-    [string]$Backend = 'http://127.0.0.1:8080'
+    [string]$Backend = 'http://127.0.0.1:8080',
+    [ValidateSet('buefy', 'quasar')]
+    [string]$Frontend = 'buefy'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$webRoot = Join-Path $repoRoot 'web'
+if ($Frontend -eq 'quasar') {
+    $webRoot = Join-Path $repoRoot 'web-quasar'
+}
+else {
+    $webRoot = Join-Path $repoRoot 'web'
+}
 
 if (-not (Test-Path $webRoot)) {
     throw "找不到前端工程目录：$webRoot"

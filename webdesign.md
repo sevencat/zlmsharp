@@ -10,7 +10,7 @@
 |---|---|---|
 | 产物形态 | 单文件 html（JS/CSS/图标/播放器全部内联） | 离线可用；替换/回滚只是换一个文件 |
 | 承载方式 | 外部目录（`http.rootPath`，默认 `./WebUI`），**不内嵌进程序集** | 改页面不用重编译；发布包只多一个文件 |
-| 前端框架 | Vue 3 + Buefy 3 | Buefy 3 是原生 Vue 3 版本，自带 Bulma 1.x 样式 |
+| 前端框架 | Vue 3 + Buefy 3（默认，`web/`）<br>Vue 3 + Quasar 2（可选，`web-quasar/`） | Buefy 3 是原生 Vue 3 版本，自带 Bulma 1.x 样式；Quasar 版为另一套同功能实现，产物同为单文件，二选一部署 |
 | 图标 | `@mdi/js`（纯 SVG path 数据） | 不引入 woff2 字体，体积可控且可 tree-shake |
 | 播放 | `mpegts.js` 打包进产物 | 旧版从 CDN 引入，离线环境必坏 |
 | 构建 | Vite 6 + `vite-plugin-singlefile` 2.1 | 官方做法，`assetsInlineLimit: Infinity` 保证零外链 |
@@ -48,7 +48,28 @@ src/ZlmSharp/WebUI/
   index.html.gz                    # 构建产物（gzip 预压缩），随仓库入库
 ```
 
-`web/dist`、`web/node_modules` 已在 `web/.gitignore` 中排除；**入库的是 `src/ZlmSharp/WebUI/index.html`**，因此普通开发和使用者不需要安装 Node。
+Quasar 版结构相同，只有框架层不同：
+
+```
+web-quasar/                       # Quasar 2 实现（可选，产物与 web/ 完全等价）
+  package.json
+  vite.config.ts                  # 同样是单文件内联 + dev 代理（端口 5174）
+  index.html
+  scripts/postbuild.mjs           # 与 web/ 相同，输出到同一个 WebUI 目录
+  src/
+    main.ts                       # Quasar 按需注册 + html/body 样式小写类名
+    router.ts                     # hash 路由 + navItems / navGroups（分组菜单）
+    api.ts store.ts types.ts      # 与 web/ 一一对应（接口、轮询、类型）
+    icons.ts                      # 官方 SVG 图标集 + MDI path 补全（无字体）
+    notify.ts confirm.ts          # 用 Quasar Notify/Dialog 替代 Buefy 的 toast/dialog
+    theme.ts                      # 明暗主题（body--dark + CSS 变量）
+    App.vue                       # 侧栏（宽屏常驻/窄屏抽屉+顶部 tabs）+ 顶栏 + 日志面板
+    components/                   # FlvPlayer.vue、RecordPlayer.vue（与框架无关，直接复用）
+    views/                        # 7 个页面，功能与 web/src/views 对齐
+    styles/app.scss               # 布局与主题变量
+```
+
+`web/dist`、`web-quasar/dist`、各自的 `node_modules` 已在 `.gitignore` 中排除；**入库的是 `src/ZlmSharp/WebUI/index.html.gz`**，因此普通开发和使用者不需要安装 Node。
 
 ---
 
@@ -168,13 +189,17 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 
 | 目的 | 命令 |
 |---|---|
-| 构建单文件并回写后端 | `pwsh scripts/build-web.ps1` |
+| 构建单文件并回写后端（Buefy 版，默认） | `pwsh scripts/build-web.ps1` |
+| 构建单文件并回写后端（Quasar 版） | `pwsh scripts/build-web.ps1 -Frontend quasar` |
 | 只跑 Vite 构建（不装依赖） | `pwsh scripts/build-web.ps1 -SkipInstall` |
-| 开发服务器（热更新） | `pwsh scripts/dev-web.ps1 -Backend http://127.0.0.1:8080` |
-| 类型检查 | `cd web; npm run typecheck` |
+| 开发服务器（热更新，Buefy 5173） | `pwsh scripts/dev-web.ps1 -Backend http://127.0.0.1:8080` |
+| 开发服务器（热更新，Quasar 5174） | `pwsh scripts/dev-web.ps1 -Frontend quasar` |
+| 类型检查 | `cd web; npm run typecheck`（Quasar 版：`cd web-quasar; npx vue-tsc --noEmit`） |
 | 后端构建/测试 | `dotnet build src/ZlmSharp/ZlmSharp.csproj` / `dotnet test tests/ZlmSharp.Tests` |
 
 开发模式下 Vite 监听 5173，把 `/index/api` 与 `/live`（含 WebSocket）代理到后端，改代码即时生效；确认无误后再跑一次 `build-web.ps1` 回写产物。
+
+> 两套前端产物落在同一个位置（`src/ZlmSharp/WebUI/index.html.gz`），构建哪个就在线上跑哪个，不会并存。
 
 > 本机/部分环境配置了 `npm config set omit dev`，会导致 `vite` 装不上。脚本已使用 `npm ci|install --include=dev` 规避。
 
@@ -211,7 +236,7 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 | 会话 | `getSessionList`、`kick_session` |
 | 录像 | `getMp4RecordFile`、`deleteRecordFile`、`startRecord`、`stopRecord` |
 | 代理 / 转推 | `addStreamProxy`、`delStreamProxy`、`getPushList`、`startPush`、`stopPush` |
-| AI 分析 | `yoloInfo`、`getYoloResult`、`analyzeResult`、`startYoloOverlay`、`stopYoloOverlay`、`getYoloOverlay` |
+| AI 分析 | `getAnalyzerList`、`analyzeResult`、`startOverlay`、`stopOverlay`、`getOverlay`（兼容旧名 `yoloInfo`、`getYoloResult`、`startYoloOverlay`、`stopYoloOverlay`、`getYoloOverlay`） |
 | API 调试 | `getApiList` + 任意接口 |
 
 ---
@@ -227,7 +252,26 @@ web/src/**  ──vite build──▶  web/dist/index.html（单文件）
 
 ---
 
-## 9. 后续可做
+## 9. Quasar 版（`web-quasar/`）
+
+与 Buefy 版**功能完全对齐**的另一套实现，产物同样是单个 `index.html`，部署位置、构建链路、后端接口全都相同。
+
+| 方面 | 做法 |
+|---|---|
+| 组件库 | Quasar 2，`app.use(Quasar, { plugins: { Notify, Dialog } })` 全量注册（单文件方案不按需拆包） |
+| 图标 | `quasar/icon-set/svg-mdi-v7` 官方 SVG 图标集 + 自定义 MDI path 兜底（`iconMapFn`），**不加载任何字体**，仍零外链 |
+| 提示/确认 | `notify.ts` / `confirm.ts` 封装 `Notify`、`Dialog`，替换 Buefy 的 `toast`、`dialog.confirm` |
+| 主题 | `theme.ts` 切 `body--dark`，配色走 CSS 变量（`--app-bg` / `--app-surface` / `--app-border` / `--app-text` / `--app-muted`） |
+| 布局 | `q-layout` + `q-header` + `q-drawer`：≥1024px 侧栏常驻并分组（监控 / 媒体 / 智能）；<1024px 收成抽屉，同时顶栏带一排 `q-tabs` 横向入口，保证任何宽度都能看到全部功能 |
+| 页面 | 总览、在线流、会话、录像、代理 / 转推、AI 分析、API 调试，7 个页面一一对应；总览页额外有"快捷入口"卡片 |
+| 播放器 | `FlvPlayer.vue`、`RecordPlayer.vue` 与框架无关，直接从 `web/src/components` 复用 |
+| 体积（实测） | `index.html` ≈ 952 KB（未压缩）；gzip ≈ 278 KB；构建 ≈ 6 s |
+
+> 侧栏展开状态由 `window.innerWidth` 判定并在 `resize` 时同步，不依赖 `show-if-above` 的初始化时序；`q-drawer` 加了 `persistent`，避免路由切换时被框架自动收起。
+
+---
+
+## 10. 后续可做
 
 - 配置编辑页（先补 `getServerConfig` / `setServerConfig`）
 - 录像文件下载（`api.downloadRoot` 已存在，缺 HTTP 下载路由）
